@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Globe,
   Plus,
@@ -17,16 +17,18 @@ import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Ca
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
-import { PROJECTS } from '@/lib/dummy-data';
 import { Project } from '@/types/analytics';
-import { cn } from '@/lib/utils';
 
 export default function ProjectsPage() {
-  const [projectsList, setProjectsList] = useState<Project[]>(PROJECTS);
+  const [projectsList, setProjectsList] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
+  const [createdApiKey, setCreatedApiKey] = useState('');
 
   // Form states
   const [projectName, setProjectName] = useState('');
@@ -42,25 +44,49 @@ export default function ProjectsPage() {
     setCreateModalOpen(true);
   };
 
-  const handleCreateProject = (e: React.FormEvent) => {
+  const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
+
     if (!projectName.trim()) return;
 
-    const newProject: Project = {
-      id: `proj_${Date.now()}`,
-      name: projectName,
-      websiteUrl: websiteUrl || 'https://new-app.io',
-      platform,
-      status: 'active',
-      createdAt: new Date().toISOString().split('T')[0],
-      eventCount: 0,
-      lastActivity: 'Just now',
-      description: description || 'New client analytics project',
-      environment: 'production',
-    };
+    try {
+      const response = await fetch('/api/projects', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: projectName,
+          websiteUrl,
+          platform,
+          description,
+          environment: 'production',
+        }),
+      });
 
-    setProjectsList([newProject, ...projectsList]);
-    setCreateModalOpen(false);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create project');
+      }
+
+      // Refresh projects from database
+      await fetchProjects();
+
+      setCreateModalOpen(false);
+      setProjectName('');
+      setWebsiteUrl('');
+      setPlatform('Next.js');
+      setDescription('');
+
+      setCreatedApiKey(data.apiKey);
+      setApiKeyModalOpen(true);
+    } catch (err) {
+      console.error('Create project error:', err);
+      alert(
+        err instanceof Error ? err.message : 'Failed to create project'
+      );
+    }
   };
 
   const openEditModal = (p: Project) => {
@@ -72,24 +98,41 @@ export default function ProjectsPage() {
     setEditModalOpen(true);
   };
 
-  const handleSaveEdit = (e: React.FormEvent) => {
+  const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
+
     if (!activeProject) return;
 
-    const updated = projectsList.map((p) =>
-      p.id === activeProject.id
-        ? {
-            ...p,
-            name: projectName,
-            websiteUrl,
-            platform,
-            description,
-          }
-        : p
-    );
+    try {
+      const response = await fetch('/api/projects', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          projectId: activeProject.id,
+          name: projectName,
+          websiteUrl,
+          platform,
+          description,
+        }),
+      });
 
-    setProjectsList(updated);
-    setEditModalOpen(false);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to update project');
+      }
+
+      await fetchProjects();
+
+      setEditModalOpen(false);
+    } catch (err) {
+      console.error('Update project error:', err);
+      alert(
+        err instanceof Error ? err.message : 'Failed to update project'
+      );
+    }
   };
 
   const openDeleteModal = (p: Project) => {
@@ -97,10 +140,73 @@ export default function ProjectsPage() {
     setDeleteModalOpen(true);
   };
 
-  const handleDeleteProject = () => {
+  const handleDeleteProject = async () => {
     if (!activeProject) return;
-    setProjectsList(projectsList.filter((p) => p.id !== activeProject.id));
-    setDeleteModalOpen(false);
+
+    try {
+      const response = await fetch(
+        `/api/projects?projectId=${encodeURIComponent(activeProject.id)}`,
+        {
+          method: 'DELETE',
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to delete project');
+      }
+
+      await fetchProjects();
+
+      setDeleteModalOpen(false);
+      setActiveProject(null);
+    } catch (err) {
+      console.error('Delete project error:', err);
+      alert(
+        err instanceof Error ? err.message : 'Failed to delete project'
+      );
+    }
+  };
+
+  useEffect(() => {
+    fetchProjects();
+  }, []);
+
+  const fetchProjects = async () => {
+    try {
+      setLoading(true);
+      setError('');
+
+      const response = await fetch('/api/projects');
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch projects');
+      }
+
+      const formattedProjects: Project[] = data.projects.map(
+        (project: any) => ({
+          ...project,
+          status: 'active',
+          createdAt: new Date(project.createdAt)
+            .toISOString()
+            .split('T')[0],
+          lastActivity:
+            project.eventCount > 0 ? 'Recently' : 'No events yet',
+        })
+      );
+
+      setProjectsList(formattedProjects);
+    } catch (err) {
+      console.error('Fetch projects error:', err);
+      setError(
+        err instanceof Error ? err.message : 'Failed to fetch projects'
+      );
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -121,99 +227,113 @@ export default function ProjectsPage() {
       </div>
 
       {/* Projects Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {projectsList.map((project) => (
-          <Card
-            key={project.id}
-            className="flex flex-col justify-between hover:border-slate-700 transition-all duration-200"
-          >
-            <div>
-              {/* Header */}
-              <div className="flex items-start justify-between pb-3 border-b border-slate-800">
-                <div className="flex items-center gap-2.5">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600/20 text-indigo-400 border border-indigo-500/30">
-                    <Globe className="h-5 w-5" />
+      {loading ? (
+        <div className="py-12 text-center text-sm text-slate-400">
+          Loading projects...
+        </div>
+      ) : error ? (
+        <div className="py-12 text-center text-sm text-rose-400">
+          {error}
+        </div>
+      ) : projectsList.length === 0 ? (
+        <div className="py-12 text-center text-sm text-slate-400">
+          No projects yet. Create your first project.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {projectsList.map((project) => (
+            <Card
+              key={project.id}
+              className="flex flex-col justify-between hover:border-slate-700 transition-all duration-200"
+            >
+              <div>
+                {/* Header */}
+                <div className="flex items-start justify-between pb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600/20 text-indigo-400 border border-indigo-500/30">
+                      <Globe className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-white">{project.name}</h3>
+                      <Badge variant="neutral" className="text-[10px] py-0 px-1.5 mt-0.5">
+                        {project.platform}
+                      </Badge>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-white">{project.name}</h3>
-                    <Badge variant="neutral" className="text-[10px] py-0 px-1.5 mt-0.5">
-                      {project.platform}
-                    </Badge>
-                  </div>
+
+                  <Badge
+                    variant={
+                      project.status === 'active'
+                        ? 'success'
+                        : project.status === 'setup_required'
+                          ? 'warning'
+                          : 'neutral'
+                    }
+                    className="capitalize"
+                  >
+                    {project.status === 'active' ? 'Active' : 'Setup Required'}
+                  </Badge>
                 </div>
 
-                <Badge
-                  variant={
-                    project.status === 'active'
-                      ? 'success'
-                      : project.status === 'setup_required'
-                      ? 'warning'
-                      : 'neutral'
-                  }
-                  className="capitalize"
-                >
-                  {project.status === 'active' ? 'Active' : 'Setup Required'}
-                </Badge>
-              </div>
+                {/* Body */}
+                <div className="py-4 space-y-3">
+                  <p className="text-xs text-slate-400 leading-relaxed min-h-[36px]">
+                    {project.description}
+                  </p>
 
-              {/* Body */}
-              <div className="py-4 space-y-3">
-                <p className="text-xs text-slate-400 leading-relaxed min-h-[36px]">
-                  {project.description}
-                </p>
-
-                <div className="rounded-lg bg-slate-900/60 p-2.5 border border-slate-800 space-y-1.5 text-xs">
-                  <div className="flex items-center justify-between text-slate-400">
-                    <span>Target URL:</span>
-                    <a
-                      href={project.websiteUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-mono text-indigo-400 hover:text-indigo-300 truncate max-w-[160px] flex items-center gap-1"
-                    >
-                      <span className="truncate">{project.websiteUrl}</span>
-                      <ExternalLink className="h-3 w-3 shrink-0" />
-                    </a>
-                  </div>
-                  <div className="flex items-center justify-between text-slate-400">
-                    <span>Total Events:</span>
-                    <span className="font-mono font-bold text-white">
-                      {project.eventCount.toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-slate-400">
-                    <span>Last Ingested:</span>
-                    <span className="text-slate-300">{project.lastActivity}</span>
+                  <div className="rounded-lg bg-slate-900/60 p-2.5 border border-slate-800 space-y-1.5 text-xs">
+                    <div className="flex items-center justify-between text-slate-400">
+                      <span>Target URL:</span>
+                      <a
+                        href={project.websiteUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-mono text-indigo-400 hover:text-indigo-300 truncate max-w-[160px] flex items-center gap-1"
+                      >
+                        <span className="truncate">{project.websiteUrl}</span>
+                        <ExternalLink className="h-3 w-3 shrink-0" />
+                      </a>
+                    </div>
+                    <div className="flex items-center justify-between text-slate-400">
+                      <span>Total Events:</span>
+                      <span className="font-mono font-bold text-white">
+                        {project.eventCount.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-slate-400">
+                      <span>Last Ingested:</span>
+                      <span className="text-slate-300">{project.lastActivity}</span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
 
-            {/* Actions footer */}
-            <div className="flex items-center justify-between pt-3 border-t border-slate-800">
-              <span className="text-[11px] text-slate-400 font-mono">ID: {project.id}</span>
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => openEditModal(project)}
-                  className="h-8 px-2 text-slate-400 hover:text-white"
-                >
-                  <Edit2 className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => openDeleteModal(project)}
-                  className="h-8 px-2 text-slate-400 hover:text-rose-400"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+              {/* Actions footer */}
+              <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+                <span className="text-[11px] text-slate-400 font-mono">ID: {project.id}</span>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openEditModal(project)}
+                    className="h-8 px-2 text-slate-400 hover:text-white"
+                  >
+                    <Edit2 className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openDeleteModal(project)}
+                    className="h-8 px-2 text-slate-400 hover:text-rose-400"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
               </div>
-            </div>
-          </Card>
-        ))}
-      </div>
+            </Card>
+          ))}
+        </div>
+      )}
 
       {/* Create Project Modal */}
       <Modal
@@ -406,7 +526,60 @@ export default function ProjectsPage() {
             </div>
           </div>
         </Modal>
+
       )}
+      <Modal
+        isOpen={apiKeyModalOpen}
+        onClose={() => setApiKeyModalOpen(false)}
+        title="Project Created Successfully"
+        description="Copy and securely save this API key. It will not be shown again."
+      >
+        <div className="space-y-4">
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+            <p className="text-xs text-amber-300">
+              Important: Store this key securely. Do not share it publicly or
+              commit it to your repository.
+            </p>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-300">
+              Project API Key
+            </label>
+
+            <input
+              type="text"
+              readOnly
+              value={createdApiKey}
+              className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-mono text-white"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={async () => {
+                await navigator.clipboard.writeText(createdApiKey);
+              }}
+            >
+              Copy API Key
+            </Button>
+
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                setApiKeyModalOpen(false);
+                setCreatedApiKey('');
+              }}
+            >
+              Done
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

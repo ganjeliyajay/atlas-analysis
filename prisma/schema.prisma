@@ -8,17 +8,17 @@ datasource db {
 }
 
 model User {
-  id            String   @id @default(uuid())
+  id            String    @id @default(uuid())
   name          String
-  email         String   @unique
+  email         String    @unique
   password      String
-  role          String   @default("owner")
+  role          String    @default("owner")
   emailVerified DateTime?
   image         String?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime  @default(now())
 
-  memberships   OrganizationMember[]
-  ownedOrganizations Organization[] @relation("OrganizationOwner")
+  memberships        OrganizationMember[]
+  ownedOrganizations Organization[]       @relation("OrganizationOwner")
 }
 
 model Organization {
@@ -28,10 +28,11 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  ownerId   String
-  owner     User     @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerId String
+  owner   User   @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
 
-  members   OrganizationMember[]
+  members  OrganizationMember[]
+  projects Project[]
 }
 
 model OrganizationMember {
@@ -46,4 +47,46 @@ model OrganizationMember {
 
   @@unique([userId, organizationId])
   @@index([organizationId])
+}
+
+model Project {
+  id           String   @id @default(uuid())
+  name         String
+  slug         String
+  websiteUrl   String?
+  platform     String?
+  description  String?
+  environment  String   @default("production")
+  apiKeyHash   String?  @unique
+  apiKeyPrefix String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  events AnalyticsEvent[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+}
+
+model AnalyticsEvent {
+  id         String   @id @default(uuid())
+  eventName  String
+  userId     String?
+  sessionId  String?
+  properties Json?
+  pageUrl    String?
+  country    String?
+  device     String?
+  browser    String?
+  createdAt  DateTime @default(now())
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+  @@index([projectId, eventName])
+  @@index([projectId, userId])
 }
