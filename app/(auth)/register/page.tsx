@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Activity, User, Mail, Lock, ArrowRight, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
+import { signIn } from "next-auth/react";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -14,12 +15,55 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+
+    if (password !== confirmPassword) {
+      alert("Passwords do not match");
+      return;
+    }
+
     setLoading(true);
-    setTimeout(() => {
-      router.push('/dashboard');
-    }, 700);
+
+    try {
+      const response = await fetch("/api/register", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          fullName,
+          workEmail,
+          password,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        alert(data.message || "Registration failed");
+        return;
+      }
+
+      const loginResult = await signIn("credentials", {
+        email: workEmail,
+        password,
+        redirect: false,
+      });
+
+      if (loginResult?.error) {
+        alert("Account created successfully. Please login.");
+        router.push("/login");
+        return;
+      }
+
+      router.push("/dashboard");
+    } catch (error) {
+      console.error("Registration error:", error);
+      alert("Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

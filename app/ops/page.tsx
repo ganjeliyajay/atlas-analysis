@@ -79,7 +79,6 @@ export default function OpsConsolePage() {
 
   return (
     <div className="space-y-6">
-      {/* Top Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
         <div>
           <div className="flex items-center gap-2">
@@ -99,7 +98,6 @@ export default function OpsConsolePage() {
         </div>
       </div>
 
-      {/* Ops Overview KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="p-4 bg-slate-900/60 border-slate-800">
           <div className="flex items-center justify-between">
@@ -140,7 +138,6 @@ export default function OpsConsolePage() {
         </Card>
       </div>
 
-      {/* Platform Ingestion Chart */}
       <Card className="p-6 bg-slate-900/50">
         <CardHeader>
           <div>
@@ -154,7 +151,6 @@ export default function OpsConsolePage() {
         </div>
       </Card>
 
-      {/* Tenant Management Table */}
       <Card className="p-0 overflow-hidden bg-slate-900/60">
         {/* Table Filters */}
         <div className="p-4 border-b border-slate-800 flex flex-col sm:flex-row gap-3 justify-between items-center bg-slate-950/40">
@@ -198,7 +194,6 @@ export default function OpsConsolePage() {
           </div>
         </div>
 
-        {/* Table Content */}
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="border-b border-slate-800 bg-slate-900/90 text-slate-400">
@@ -299,7 +294,6 @@ export default function OpsConsolePage() {
           </table>
         </div>
 
-        {/* Pagination */}
         <div className="flex items-center justify-between p-4 border-t border-slate-800 bg-slate-950/40 text-xs">
           <span className="text-slate-400">
             Page {page} of {totalPages}
@@ -325,7 +319,6 @@ export default function OpsConsolePage() {
         </div>
       </Card>
 
-      {/* Tenant Detail Drawer */}
       {selectedTenant && (
         <SlideOver
           isOpen={!!selectedTenant}
@@ -354,7 +347,6 @@ export default function OpsConsolePage() {
               </div>
             </div>
 
-            {/* Quota breakdown */}
             <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/60 space-y-3">
               <div className="flex items-center justify-between text-xs">
                 <span className="font-semibold text-white">Monthly Quota Consumption</span>
@@ -376,7 +368,6 @@ export default function OpsConsolePage() {
               </div>
             </div>
 
-            {/* Infrastructure Details */}
             <div>
               <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
                 Infrastructure Partitioning
@@ -397,7 +388,6 @@ export default function OpsConsolePage() {
               </div>
             </div>
 
-            {/* Action button */}
             <div className="pt-4 border-t border-slate-800 flex justify-end">
               <Button
                 variant={selectedTenant.status === 'Suspended' ? 'primary' : 'danger'}
@@ -411,7 +401,6 @@ export default function OpsConsolePage() {
         </SlideOver>
       )}
 
-      {/* Suspend / Activate Modal */}
       {suspendModalTenant && (
         <Modal
           isOpen={!!suspendModalTenant}
