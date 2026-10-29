@@ -41,21 +41,59 @@ export async function POST(request: Request) {
 
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    const user = await prisma.user.create({
-      data: {
-        name: fullName,
-        email,
-        password: hashedPassword,
-      },
+    // Generate a workspace name from the user's name.
+    const organizationName = `${fullName}'s Workspace`;
+
+    // Generate a URL-friendly organization slug.
+    const baseSlug = fullName
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+
+    const uniqueSlug = `${baseSlug || "workspace"}-${crypto.randomUUID().slice(0, 8)}`;
+
+    // Create user, organization, and owner membership atomically.
+    const result = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          name: fullName,
+          email,
+          password: hashedPassword,
+        },
+      });
+
+      const organization = await tx.organization.create({
+        data: {
+          name: organizationName,
+          slug: uniqueSlug,
+          ownerId: user.id,
+        },
+      });
+
+      await tx.organizationMember.create({
+        data: {
+          userId: user.id,
+          organizationId: organization.id,
+          role: "owner",
+        },
+      });
+
+      return { user, organization };
     });
 
     return NextResponse.json(
       {
-        message: "Account created successfully",
+        message: "Account and workspace created successfully",
         user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
+          id: result.user.id,
+          name: result.user.name,
+          email: result.user.email,
+        },
+        organization: {
+          id: result.organization.id,
+          name: result.organization.name,
+          slug: result.organization.slug,
         },
       },
       { status: 201 },
