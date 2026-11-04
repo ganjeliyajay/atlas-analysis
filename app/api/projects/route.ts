@@ -1,6 +1,10 @@
+
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
+import {
+  withTenantContext,
+  withUserContext,
+} from "@/lib/db-context";
 import { randomBytes, createHash } from "crypto";
 
 function createSlug(name: string) {
@@ -16,17 +20,19 @@ function hashApiKey(apiKey: string) {
 }
 
 async function getUserOrganization(userId: string) {
-  return prisma.organizationMember.findFirst({
-    where: {
-      userId,
-    },
-    orderBy: {
-      createdAt: "asc",
-    },
-    include: {
-      organization: true,
-    },
-  });
+  return withUserContext(userId, (tx) =>
+    tx.organizationMember.findFirst({
+      where: {
+        userId,
+      },
+      orderBy: {
+        createdAt: "asc",
+      },
+      include: {
+        organization: true,
+      },
+    })
+  );
 }
 
 // ============================================
@@ -44,9 +50,9 @@ export const GET = auth(async function GET(request) {
       );
     }
 
-    const membership = await getUserOrganization(
-      session.user.id
-    );
+    const userId = session.user.id;
+
+    const membership = await getUserOrganization(userId);
 
     if (!membership) {
       return NextResponse.json(
@@ -55,21 +61,26 @@ export const GET = auth(async function GET(request) {
       );
     }
 
-    const projects = await prisma.project.findMany({
-      where: {
-        organizationId: membership.organizationId,
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-      include: {
-        _count: {
-          select: {
-            events: true,
+    const projects = await withTenantContext(
+      userId,
+      membership.organizationId,
+      (tx) =>
+        tx.project.findMany({
+          where: {
+            organizationId: membership.organizationId,
           },
-        },
-      },
-    });
+          orderBy: {
+            createdAt: "desc",
+          },
+          include: {
+            _count: {
+              select: {
+                events: true,
+              },
+            },
+          },
+        })
+    );
 
     const formattedProjects = projects.map((project) => ({
       id: project.id,
@@ -112,9 +123,9 @@ export const POST = auth(async function POST(request) {
       );
     }
 
-    const membership = await getUserOrganization(
-      session.user.id
-    );
+    const userId = session.user.id;
+
+    const membership = await getUserOrganization(userId);
 
     if (!membership) {
       return NextResponse.json(
@@ -171,22 +182,26 @@ export const POST = auth(async function POST(request) {
     const apiKey = `atl_live_${randomBytes(32).toString("hex")}`;
 
     const apiKeyHash = hashApiKey(apiKey);
-
     const apiKeyPrefix = apiKey.slice(0, 16);
 
-    const project = await prisma.project.create({
-      data: {
-        name,
-        slug,
-        websiteUrl: websiteUrl || null,
-        platform,
-        description,
-        environment,
-        apiKeyHash,
-        apiKeyPrefix,
-        organizationId: membership.organizationId,
-      },
-    });
+    const project = await withTenantContext(
+      userId,
+      membership.organizationId,
+      (tx) =>
+        tx.project.create({
+          data: {
+            name,
+            slug,
+            websiteUrl: websiteUrl || null,
+            platform,
+            description,
+            environment,
+            apiKeyHash,
+            apiKeyPrefix,
+            organizationId: membership.organizationId,
+          },
+        })
+    );
 
     return NextResponse.json(
       {
@@ -237,7 +252,6 @@ export const POST = auth(async function POST(request) {
 // PATCH: Update an existing project
 // ============================================
 
-// PATCH - Update project or regenerate API key
 export const PATCH = auth(async function PATCH(request) {
   try {
     const session = request.auth;
@@ -249,6 +263,7 @@ export const PATCH = auth(async function PATCH(request) {
       );
     }
 
+    const userId = session.user.id;
     const body = await request.json();
 
     const {
@@ -260,19 +275,17 @@ export const PATCH = auth(async function PATCH(request) {
       regenerateApiKey,
     } = body;
 
-    if (!projectId) {
+    if (
+      typeof projectId !== "string" ||
+      !projectId.trim()
+    ) {
       return NextResponse.json(
         { error: "Project ID is required" },
         { status: 400 }
       );
     }
 
-    // Check user membership
-    const membership = await prisma.organizationMember.findFirst({
-      where: {
-        userId: session.user.id,
-      },
-    });
+    const membership = await getUserOrganization(userId);
 
     if (!membership) {
       return NextResponse.json(
@@ -281,67 +294,98 @@ export const PATCH = auth(async function PATCH(request) {
       );
     }
 
-    // Verify project belongs to user's organization
-    const existingProject = await prisma.project.findFirst({
-      where: {
-        id: projectId,
-        organizationId: membership.organizationId,
-      },
-    });
+    // Generate a new API key only when requested.
+    const newApiKey = regenerateApiKey
+      ? `atl_live_${randomBytes(32).toString("hex")}`
+      : null;
 
-    if (!existingProject) {
+    const result = await withTenantContext(
+      userId,
+      membership.organizationId,
+      async (tx) => {
+        // Verify project belongs to user's organization.
+        const existingProject = await tx.project.findFirst({
+          where: {
+            id: projectId,
+            organizationId: membership.organizationId,
+          },
+          select: {
+            id: true,
+          },
+        });
+
+        if (!existingProject) {
+          return { notFound: true as const };
+        }
+
+        const updatedProject = await tx.project.update({
+          where: {
+            id: existingProject.id,
+          },
+          data: {
+            ...(name !== undefined && {
+              name,
+              slug: createSlug(name),
+            }),
+            ...(websiteUrl !== undefined && {
+              websiteUrl: websiteUrl || null,
+            }),
+            ...(platform !== undefined && { platform }),
+            ...(description !== undefined && {
+              description: description || null,
+            }),
+            ...(newApiKey && {
+              apiKeyHash: hashApiKey(newApiKey),
+              apiKeyPrefix: newApiKey.slice(0, 16),
+            }),
+          },
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            websiteUrl: true,
+            platform: true,
+            description: true,
+            environment: true,
+            apiKeyPrefix: true,
+            createdAt: true,
+          },
+        });
+
+        return {
+          notFound: false as const,
+          project: updatedProject,
+        };
+      }
+    );
+
+    if (result.notFound) {
       return NextResponse.json(
         { error: "Project not found" },
         { status: 404 }
       );
     }
 
-    // Generate a new API key only when requested
-    const newApiKey = regenerateApiKey
-      ? `atl_live_${randomBytes(32).toString("hex")}`
-      : null;
-
-    const updatedProject = await prisma.project.update({
-      where: {
-        id: existingProject.id,
-      },
-      data: {
-        ...(name !== undefined && {
-          name,
-          slug: createSlug(name),
-        }),
-        ...(websiteUrl !== undefined && {
-          websiteUrl: websiteUrl || null,
-        }),
-        ...(platform !== undefined && { platform }),
-        ...(description !== undefined && {
-          description: description || null,
-        }),
-
-        ...(newApiKey && {
-          apiKeyHash: hashApiKey(newApiKey),
-          apiKeyPrefix: newApiKey.slice(0, 16),
-        }),
-      },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        websiteUrl: true,
-        platform: true,
-        description: true,
-        environment: true,
-        apiKeyPrefix: true,
-        createdAt: true,
-      },
-    });
-
     return NextResponse.json({
-      project: updatedProject,
+      project: result.project,
       ...(newApiKey && { apiKey: newApiKey }),
     });
   } catch (error) {
     console.error("Update project error:", error);
+
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "P2002"
+    ) {
+      return NextResponse.json(
+        {
+          error: "A project with this name already exists",
+        },
+        { status: 409 }
+      );
+    }
 
     return NextResponse.json(
       { error: "Failed to update project" },
@@ -365,9 +409,9 @@ export const DELETE = auth(async function DELETE(request) {
       );
     }
 
-    const membership = await getUserOrganization(
-      session.user.id
-    );
+    const userId = session.user.id;
+
+    const membership = await getUserOrganization(userId);
 
     if (!membership) {
       return NextResponse.json(
@@ -386,26 +430,40 @@ export const DELETE = auth(async function DELETE(request) {
       );
     }
 
-    const project =
-      await prisma.project.findFirst({
-        where: {
-          id: projectId,
-          organizationId: membership.organizationId,
-        },
-      });
+    const deleted = await withTenantContext(
+      userId,
+      membership.organizationId,
+      async (tx) => {
+        const project = await tx.project.findFirst({
+          where: {
+            id: projectId,
+            organizationId: membership.organizationId,
+          },
+          select: {
+            id: true,
+          },
+        });
 
-    if (!project) {
+        if (!project) {
+          return false;
+        }
+
+        await tx.project.delete({
+          where: {
+            id: project.id,
+          },
+        });
+
+        return true;
+      }
+    );
+
+    if (!deleted) {
       return NextResponse.json(
         { error: "Project not found" },
         { status: 404 }
       );
     }
-
-    await prisma.project.delete({
-      where: {
-        id: project.id,
-      },
-    });
 
     return NextResponse.json({
       success: true,

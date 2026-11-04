@@ -1,12 +1,18 @@
+
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
+import {
+  withTenantContext,
+  withUserContext,
+} from "@/lib/db-context";
 import { Prisma } from "@/lib/generated/prisma/client";
 
 type Range = "today" | "7d" | "30d" | "90d" | "custom";
 
 function isValidDate(value: string | null): value is string {
-  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
 
   const [year, month, day] = value.split("-").map(Number);
   const date = new Date(year, month - 1, day);
@@ -18,12 +24,10 @@ function isValidDate(value: string | null): value is string {
   );
 }
 
-
 function parseDateOnly(value: string): Date {
   const [year, month, day] = value.split("-").map(Number);
   return new Date(year, month - 1, day, 0, 0, 0, 0);
 }
-
 
 function addDays(date: Date, days: number): Date {
   const result = new Date(date);
@@ -67,15 +71,19 @@ function getPreviousRangeStart(startDate: Date, range: Range) {
     case "today":
       previousStart.setHours(previousStart.getHours() - 24);
       break;
+
     case "7d":
       previousStart.setDate(previousStart.getDate() - 7);
       break;
+
     case "30d":
       previousStart.setDate(previousStart.getDate() - 30);
       break;
+
     case "90d":
       previousStart.setDate(previousStart.getDate() - 90);
       break;
+
     case "custom":
       previousStart.setDate(previousStart.getDate() - 30);
       break;
@@ -88,12 +96,13 @@ function getPercentageChange(current: number, previous: number) {
   if (previous === 0) {
     return current > 0 ? 100 : 0;
   }
+
   return Math.round(((current - previous) / previous) * 100);
 }
 
 function getRelativeTime(date: Date) {
-  
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+
   if (seconds < 60) return "Just now";
 
   const minutes = Math.floor(seconds / 60);
@@ -117,7 +126,7 @@ function emptyAnalytics(
   range: Range,
   projectId: string,
   eventName: string,
-  userId: string,
+  userId: string
 ) {
   return {
     range,
@@ -143,33 +152,40 @@ function emptyAnalytics(
 
 export const GET = auth(async function GET(request) {
   try {
-    // Authenticate user
+    // 1. Authenticate user
     const session = request.auth;
 
     if (!session?.user?.id) {
       return NextResponse.json(
         { error: "Unauthorized" },
-        { status: 401 },
+        { status: 401 }
       );
     }
 
+    const authUserId = session.user.id;
+
     const { searchParams } = new URL(request.url);
 
-    // Validate date range
+    // 2. Validate date range
     const rangeParam = searchParams.get("range");
-
     const customStartDate = searchParams.get("startDate");
     const customEndDate = searchParams.get("endDate");
 
-    const hasAnyCustomDate = Boolean(customStartDate || customEndDate);
+    const hasAnyCustomDate = Boolean(
+      customStartDate || customEndDate
+    );
+
     const hasCustomDateRange =
       isValidDate(customStartDate) &&
       isValidDate(customEndDate);
 
     if (hasAnyCustomDate && !hasCustomDateRange) {
       return NextResponse.json(
-        { error: "Both startDate and endDate must be valid dates in YYYY-MM-DD format" },
-        { status: 400 },
+        {
+          error:
+            "Both startDate and endDate must be valid dates in YYYY-MM-DD format",
+        },
+        { status: 400 }
       );
     }
 
@@ -181,22 +197,29 @@ export const GET = auth(async function GET(request) {
       "custom",
     ];
 
-    const requestedRange = allowedRanges.includes(rangeParam as Range)
+    const requestedRange = allowedRanges.includes(
+      rangeParam as Range
+    )
       ? (rangeParam as Range)
       : "30d";
 
     if (requestedRange === "custom" && !hasCustomDateRange) {
       return NextResponse.json(
-        { error: "Custom range requires startDate and endDate" },
-        { status: 400 },
+        {
+          error: "Custom range requires startDate and endDate",
+        },
+        { status: 400 }
       );
     }
 
-    const range: Range = hasCustomDateRange ? "custom" : requestedRange;
+    const range: Range = hasCustomDateRange
+      ? "custom"
+      : requestedRange;
 
     const customStart = hasCustomDateRange
       ? parseDateOnly(customStartDate)
       : null;
+
     const customEndExclusive = hasCustomDateRange
       ? addDays(parseDateOnly(customEndDate), 1)
       : null;
@@ -207,360 +230,411 @@ export const GET = auth(async function GET(request) {
       customStart.getTime() >= customEndExclusive.getTime()
     ) {
       return NextResponse.json(
-        { error: "startDate must be on or before endDate" },
-        { status: 400 },
+        {
+          error: "startDate must be on or before endDate",
+        },
+        { status: 400 }
       );
     }
 
-    // Optional project filter
-    const requestedProjectId = searchParams.get("projectId") || "All";
+    // 3. Optional filters
+    const requestedProjectId =
+      searchParams.get("projectId") || "All";
 
-    // Optional event name filter
-    const eventName = (searchParams.get("eventName") || "").trim().slice(0, 200);
+    const eventName = (searchParams.get("eventName") || "")
+      .trim()
+      .slice(0, 200);
 
-    // Optional user ID filter
-    const userId = (searchParams.get("userId") || "").trim().slice(0, 200);
+    const userId = (searchParams.get("userId") || "")
+      .trim()
+      .slice(0, 200);
 
-    // Find user's organization membership
-    const membership = await prisma.organizationMember.findFirst({
-      where: { userId: session.user.id, },
-      orderBy: { createdAt: "asc", },
-      select: { organizationId: true, },
-    });
+    // 4. Find user's organization membership
+    const membership = await withUserContext(
+      authUserId,
+      (tx) =>
+        tx.organizationMember.findFirst({
+          where: {
+            userId: authUserId,
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+          select: {
+            organizationId: true,
+          },
+        })
+    );
 
     if (!membership) {
       return NextResponse.json(
         { error: "Organization not found" },
-        { status: 404 },
+        { status: 404 }
       );
     }
 
-    // Get projects belonging to this organization
-    const organizationProjects = await prisma.project.findMany({
-      where: {
-        organizationId: membership.organizationId,
-      },
-      select: {
-        id: true,
-        name: true,
-      },
-    });
+    // 5. All tenant-scoped analytics queries
+    const result = await withTenantContext(
+      authUserId,
+      membership.organizationId,
+      async (tx) => {
+        // Get projects belonging to this organization
+        const organizationProjects = await tx.project.findMany({
+          where: {
+            organizationId: membership.organizationId,
+          },
+          select: {
+            id: true,
+            name: true,
+          },
+        });
 
-    // No projects in organization
-    if (organizationProjects.length === 0) {
-      return NextResponse.json(
-        emptyAnalytics(
-          range,
-          requestedProjectId,
-          eventName,
-          userId,
-        ),
-      );
-    }
+        // No projects in organization
+        if (organizationProjects.length === 0) {
+          return {
+            empty: true as const,
+            data: emptyAnalytics(
+              range,
+              requestedProjectId,
+              eventName,
+              userId
+            ),
+          };
+        }
 
-    let projectIds = organizationProjects.map(
-      (project) => project.id,
-    );
-
-    // Validate requested project belongs to organization
-    if (
-      requestedProjectId &&
-      requestedProjectId !== "All"
-    ) {
-      const selectedProject = organizationProjects.find(
-        (project) => project.id === requestedProjectId,
-      );
-
-      if (!selectedProject) {
-        return NextResponse.json(
-          { error: "Project not found" },
-          { status: 404 },
+        let projectIds = organizationProjects.map(
+          (project) => project.id
         );
-      }
 
-      projectIds = [selectedProject.id];
-    }
+        // Validate requested project belongs to organization
+        if (
+          requestedProjectId &&
+          requestedProjectId !== "All"
+        ) {
+          const selectedProject = organizationProjects.find(
+            (project) => project.id === requestedProjectId
+          );
 
-    const now = new Date();
-    const startDate = customStart ?? getRangeStart(range);
-    const endDateExclusive = customEndExclusive ?? now;
+          if (!selectedProject) {
+            return {
+              projectNotFound: true as const,
+            };
+          }
 
-    const currentDuration =
-      endDateExclusive.getTime() - startDate.getTime();
-
-    const previousStartDate = hasCustomDateRange
-      ? new Date(startDate.getTime() - currentDuration)
-      : range === "today"
-        ? new Date(startDate.getTime() - 24 * 60 * 60 * 1000)
-        : getPreviousRangeStart(startDate, range);
-
-    const previousEndDateExclusive =
-      range === "today" && !hasCustomDateRange
-        ? new Date(previousStartDate.getTime() + currentDuration)
-        : startDate;
-
-    // Current period filter
-    const currentWhere: Prisma.AnalyticsEventWhereInput = {
-      projectId: {
-        in: projectIds,
-      },
-      createdAt: {
-        gte: startDate,
-        lt: endDateExclusive,
-      },
-      ...(eventName
-        ? {
-          eventName: {
-            contains: eventName,
-            mode: "insensitive",
-          },
+          projectIds = [selectedProject.id];
         }
-        : {}),
-      ...(userId
-        ? {
-          userId: {
-            contains: userId,
-            mode: "insensitive",
+
+        const now = new Date();
+
+        const startDate =
+          customStart ?? getRangeStart(range);
+
+        const endDateExclusive =
+          customEndExclusive ?? now;
+
+        const currentDuration =
+          endDateExclusive.getTime() - startDate.getTime();
+
+        const previousStartDate = hasCustomDateRange
+          ? new Date(startDate.getTime() - currentDuration)
+          : range === "today"
+            ? new Date(
+                startDate.getTime() -
+                  24 * 60 * 60 * 1000
+              )
+            : getPreviousRangeStart(startDate, range);
+
+        const previousEndDateExclusive =
+          range === "today" && !hasCustomDateRange
+            ? new Date(
+                previousStartDate.getTime() +
+                  currentDuration
+              )
+            : startDate;
+
+        // Current period filter
+        const currentWhere: Prisma.AnalyticsEventWhereInput = {
+          projectId: {
+            in: projectIds,
           },
-        }
-        : {}),
-    };
-
-    // Previous period filter
-    const previousWhere: Prisma.AnalyticsEventWhereInput = {
-      projectId: {
-        in: projectIds,
-      },
-      createdAt: {
-        gte: previousStartDate,
-        lt: previousEndDateExclusive,
-      },
-      ...(eventName
-        ? {
-          eventName: {
-            contains: eventName,
-            mode: "insensitive",
+          createdAt: {
+            gte: startDate,
+            lt: endDateExclusive,
           },
-        }
-        : {}),
-      ...(userId
-        ? {
-          userId: {
-            contains: userId,
-            mode: "insensitive",
+          ...(eventName
+            ? {
+                eventName: {
+                  contains: eventName,
+                  mode: "insensitive",
+                },
+              }
+            : {}),
+          ...(userId
+            ? {
+                userId: {
+                  contains: userId,
+                  mode: "insensitive",
+                },
+              }
+            : {}),
+        };
+
+        // Previous period filter
+        const previousWhere: Prisma.AnalyticsEventWhereInput = {
+          projectId: {
+            in: projectIds,
           },
-        }
-        : {}),
-    };
-
-    // Daily chart SQL filters
-    const eventNameSql = eventName
-      ? Prisma.sql`AND "eventName" ILIKE ${`%${eventName}%`}`
-      : Prisma.empty;
-
-    const userIdSql = userId
-      ? Prisma.sql`AND "userId" ILIKE ${`%${userId}%`}`
-      : Prisma.empty;
-
-    // Fetch analytics metrics
-    const [
-      totalEvents,
-      previousTotalEvents,
-      activeUsers,
-      previousActiveUsers,
-      groupedEvents,
-      recentEvents,
-      dailyEventCounts,
-      dailyActiveUserCounts,
-    ] = await Promise.all([
-      // Total events in selected period
-      prisma.analyticsEvent.count({
-        where: currentWhere,
-      }),
-
-      // Total events in previous period
-      prisma.analyticsEvent.count({
-        where: previousWhere,
-      }),
-
-      // Distinct identified users in current period
-      prisma.analyticsEvent.groupBy({
-        by: ["userId"],
-        where: {
-          ...currentWhere,
-          userId: {
-            not: null,
+          createdAt: {
+            gte: previousStartDate,
+            lt: previousEndDateExclusive,
           },
-        },
-      }),
+          ...(eventName
+            ? {
+                eventName: {
+                  contains: eventName,
+                  mode: "insensitive",
+                },
+              }
+            : {}),
+          ...(userId
+            ? {
+                userId: {
+                  contains: userId,
+                  mode: "insensitive",
+                },
+              }
+            : {}),
+        };
 
-      // Distinct identified users in previous period
-      prisma.analyticsEvent.groupBy({
-        by: ["userId"],
-        where: {
-          ...previousWhere,
-          userId: {
-            not: null,
-          },
-        },
-      }),
+        // Daily chart SQL filters
+        const eventNameSql = eventName
+          ? Prisma.sql`AND "eventName" ILIKE ${`%${eventName}%`}`
+          : Prisma.empty;
 
-      // Top events in selected project(s)
-      prisma.analyticsEvent.groupBy({
-        by: ["eventName"],
-        where: currentWhere,
-        _count: {
-          _all: true,
-        },
-      }),
+        const userIdSql = userId
+          ? Prisma.sql`AND "userId" ILIKE ${`%${userId}%`}`
+          : Prisma.empty;
 
-      // Latest events in selected project(s)
-      prisma.analyticsEvent.findMany({
-        where: currentWhere,
-        orderBy: {
-          createdAt: "desc",
-        },
-        take: 10,
-        select: {
-          id: true,
-          eventName: true,
-          userId: true,
-          createdAt: true,
-          project: {
-            select: {
-              name: true,
-            },
-          },
-        },
-      }),
-
-      // Daily event volume using PostgreSQL aggregation
-      prisma.$queryRaw<
-        Array<{
-          day: Date;
-          count: bigint;
-        }>
-      >`
-        SELECT
-          DATE_TRUNC('day', "createdAt") AS day,
-          COUNT(*)::bigint AS count
-        FROM "AnalyticsEvent"
-        WHERE "projectId" IN (${Prisma.join(projectIds)})
-          AND "createdAt" >= ${startDate}
-          AND "createdAt" < ${endDateExclusive}
-          ${eventNameSql}
-          ${userIdSql}
-        GROUP BY DATE_TRUNC('day', "createdAt")
-        ORDER BY day ASC
-      `,
-
-      // Daily distinct identified users using PostgreSQL aggregation
-      prisma.$queryRaw<
-        Array<{
-          day: Date;
-          count: bigint;
-        }>
-      >`
-        SELECT
-          DATE_TRUNC('day', "createdAt") AS day,
-          COUNT(DISTINCT "userId")::bigint AS count
-        FROM "AnalyticsEvent"
-        WHERE "projectId" IN (${Prisma.join(projectIds)})
-          AND "createdAt" >= ${startDate}
-          AND "createdAt" < ${endDateExclusive}
-          AND "userId" IS NOT NULL
-          ${eventNameSql}
-          ${userIdSql}
-        GROUP BY DATE_TRUNC('day', "createdAt")
-        ORDER BY day ASC
-      `,
-    ]);
-
-    const activeUsersCount = activeUsers.length;
-    const previousActiveUsersCount =
-      previousActiveUsers.length;
-
-    // Format top events
-    const topEvents = groupedEvents
-      .map((event) => ({
-        name: event.eventName,
-        count: event._count._all,
-      }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5)
-      .map((event) => ({
-        ...event,
-        percentage:
-          totalEvents > 0
-            ? Math.round(
-              (event.count / totalEvents) * 100,
-            )
-            : 0,
-      }));
-
-    // Format events over time
-    const eventsOverTime = dailyEventCounts.map((item) => ({
-      date: item.day.toISOString().slice(0, 10),
-      eventVolume: Number(item.count),
-    }));
-
-    // Format daily active users
-    const activeUsersOverTime = dailyActiveUserCounts.map((item) => ({
-      date: item.day.toISOString().slice(0, 10),
-      activeUsers: Number(item.count),
-    }));
-
-    // Format recent events
-    const formattedRecentEvents = recentEvents.map(
-      (event) => ({
-        id: event.id,
-        name: event.eventName,
-        userId: event.userId,
-        projectName: event.project.name,
-        timestamp: event.createdAt.toISOString(),
-        relativeTime: getRelativeTime(event.createdAt),
-      }),
-    );
-
-    return NextResponse.json({
-      range,
-
-      // Active filters
-      filters: {
-        projectId: requestedProjectId,
-        eventName,
-        userId,
-        startDate: startDate.toISOString(),
-        endDate: new Date(endDateExclusive.getTime() - 1).toISOString(),
-      },
-
-      kpis: {
-        totalEvents,
-        activeUsers: activeUsersCount,
-      },
-
-      changes: {
-        totalEvents: getPercentageChange(
+        // Fetch analytics metrics
+        const [
           totalEvents,
           previousTotalEvents,
-        ),
-        activeUsers: getPercentageChange(
-          activeUsersCount,
-          previousActiveUsersCount,
-        ),
-      },
+          activeUsers,
+          previousActiveUsers,
+          groupedEvents,
+          recentEvents,
+          dailyEventCounts,
+          dailyActiveUserCounts,
+        ] = await Promise.all([
+          // Total events in selected period
+          tx.analyticsEvent.count({
+            where: currentWhere,
+          }),
 
-      topEvents,
-      eventsOverTime,
-      activeUsersOverTime,
-      recentEvents: formattedRecentEvents,
-    });
+          // Total events in previous period
+          tx.analyticsEvent.count({
+            where: previousWhere,
+          }),
+
+          // Distinct identified users in current period
+          tx.analyticsEvent.groupBy({
+            by: ["userId"],
+            where: {
+              ...currentWhere,
+              userId: {
+                not: null,
+              },
+            },
+          }),
+
+          // Distinct identified users in previous period
+          tx.analyticsEvent.groupBy({
+            by: ["userId"],
+            where: {
+              ...previousWhere,
+              userId: {
+                not: null,
+              },
+            },
+          }),
+
+          // Top events in selected project(s)
+          tx.analyticsEvent.groupBy({
+            by: ["eventName"],
+            where: currentWhere,
+            _count: {
+              _all: true,
+            },
+          }),
+
+          // Latest events in selected project(s)
+          tx.analyticsEvent.findMany({
+            where: currentWhere,
+            orderBy: {
+              createdAt: "desc",
+            },
+            take: 10,
+            select: {
+              id: true,
+              eventName: true,
+              userId: true,
+              createdAt: true,
+              project: {
+                select: {
+                  name: true,
+                },
+              },
+            },
+          }),
+
+          // Daily event volume using PostgreSQL aggregation
+          tx.$queryRaw<
+            Array<{
+              day: Date;
+              count: bigint;
+            }>
+          >`
+            SELECT
+              DATE_TRUNC('day', "createdAt") AS day,
+              COUNT(*)::bigint AS count
+            FROM "AnalyticsEvent"
+            WHERE "projectId" IN (${Prisma.join(projectIds)})
+              AND "createdAt" >= ${startDate}
+              AND "createdAt" < ${endDateExclusive}
+              ${eventNameSql}
+              ${userIdSql}
+            GROUP BY DATE_TRUNC('day', "createdAt")
+            ORDER BY day ASC
+          `,
+
+          // Daily distinct identified users using PostgreSQL aggregation
+          tx.$queryRaw<
+            Array<{
+              day: Date;
+              count: bigint;
+            }>
+          >`
+            SELECT
+              DATE_TRUNC('day', "createdAt") AS day,
+              COUNT(DISTINCT "userId")::bigint AS count
+            FROM "AnalyticsEvent"
+            WHERE "projectId" IN (${Prisma.join(projectIds)})
+              AND "createdAt" >= ${startDate}
+              AND "createdAt" < ${endDateExclusive}
+              AND "userId" IS NOT NULL
+              ${eventNameSql}
+              ${userIdSql}
+            GROUP BY DATE_TRUNC('day', "createdAt")
+            ORDER BY day ASC
+          `,
+        ]);
+
+        const activeUsersCount = activeUsers.length;
+
+        const previousActiveUsersCount =
+          previousActiveUsers.length;
+
+        // Format top events
+        const topEvents = groupedEvents
+          .map((event) => ({
+            name: event.eventName,
+            count: event._count._all,
+          }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 5)
+          .map((event) => ({
+            ...event,
+            percentage:
+              totalEvents > 0
+                ? Math.round(
+                    (event.count / totalEvents) * 100
+                  )
+                : 0,
+          }));
+
+        // Format events over time
+        const eventsOverTime = dailyEventCounts.map(
+          (item) => ({
+            date: item.day.toISOString().slice(0, 10),
+            eventVolume: Number(item.count),
+          })
+        );
+
+        // Format daily active users
+        const activeUsersOverTime =
+          dailyActiveUserCounts.map((item) => ({
+            date: item.day.toISOString().slice(0, 10),
+            activeUsers: Number(item.count),
+          }));
+
+        // Format recent events
+        const formattedRecentEvents = recentEvents.map(
+          (event) => ({
+            id: event.id,
+            name: event.eventName,
+            userId: event.userId,
+            projectName: event.project.name,
+            timestamp: event.createdAt.toISOString(),
+            relativeTime: getRelativeTime(event.createdAt),
+          })
+        );
+
+        return {
+          empty: false as const,
+          projectNotFound: false as const,
+          data: {
+            range,
+
+            // Active filters
+            filters: {
+              projectId: requestedProjectId,
+              eventName,
+              userId,
+              startDate: startDate.toISOString(),
+              endDate: new Date(
+                endDateExclusive.getTime() - 1
+              ).toISOString(),
+            },
+
+            kpis: {
+              totalEvents,
+              activeUsers: activeUsersCount,
+            },
+
+            changes: {
+              totalEvents: getPercentageChange(
+                totalEvents,
+                previousTotalEvents
+              ),
+              activeUsers: getPercentageChange(
+                activeUsersCount,
+                previousActiveUsersCount
+              ),
+            },
+
+            topEvents,
+            eventsOverTime,
+            activeUsersOverTime,
+            recentEvents: formattedRecentEvents,
+          },
+        };
+      }
+    );
+
+    if ("projectNotFound" in result && result.projectNotFound) {
+      return NextResponse.json(
+        { error: "Project not found" },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json(result.data);
   } catch (error) {
     console.error("Dashboard API error:", error);
 
     return NextResponse.json(
       { error: "Failed to fetch dashboard analytics" },
-      { status: 500 },
+      { status: 500 }
     );
   }
 });

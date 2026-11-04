@@ -1,7 +1,10 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
+import {
+  withTenantContext,
+  withUserContext,
+} from "@/lib/db-context";
 
 const POLL_INTERVAL = 3000;
 const INITIAL_LIMIT = 40;
@@ -44,40 +47,35 @@ function mapEvent(event: LiveEventRecord) {
 export const GET = auth(async function GET(request) {
   try {
     const session = request.auth;
+    const userId = session?.user?.id;
 
-    if (!session?.user?.id) {
+    if (!userId) {
       return NextResponse.json(
         { error: "Unauthorized" },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
-    // 1. Find the user's organization.
-    const membership = await prisma.organizationMember.findFirst({
-      where: {
-        userId: session.user.id,
-      },
-      select: {
-        organizationId: true,
-      },
-      orderBy: {
-        createdAt: "asc",
-      },
+    const membership = await withUserContext(userId, async (tx) => {
+      return tx.organizationMember.findFirst({
+        where: { userId },
+        select: { organizationId: true },
+        orderBy: { createdAt: "asc" },
+      });
     });
 
     if (!membership) {
       return NextResponse.json(
         { error: "Organization not found" },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
-    // 2. Read and validate query parameters.
     const { searchParams } = new URL(request.url);
 
     const requestedLimit = Number.parseInt(
       searchParams.get("limit") || String(INITIAL_LIMIT),
-      10
+      10,
     );
 
     const limit = Number.isFinite(requestedLimit)
@@ -86,72 +84,100 @@ export const GET = auth(async function GET(request) {
 
     const projectId = searchParams.get("projectId");
 
-    // 3. Validate selected project.
-    if (projectId && projectId !== "All") {
-      const projectExists = await prisma.project.findFirst({
-        where: {
-          id: projectId,
-          organizationId: membership.organizationId,
-        },
-        select: {
-          id: true,
-        },
-      });
-
-      if (!projectExists) {
-        return NextResponse.json(
-          { error: "Project not found or access denied" },
-          { status: 404 }
-        );
-      }
-    }
-
     const isSse =
       request.headers.get("accept")?.includes("text/event-stream") ||
       searchParams.get("stream") === "true";
 
-    // Shared organization and project filter.
-    const eventWhere = {
-      project: {
-        organizationId: membership.organizationId,
-      },
-      ...(projectId && projectId !== "All"
-        ? { projectId }
-        : {}),
+    const organizationId = membership.organizationId;
+
+    const fetchEvents = async (
+      take: number,
+      createdAtGte?: Date,
+    ) => {
+      return withTenantContext(
+        userId,
+        organizationId,
+        async (tx) => {
+          if (projectId && projectId !== "All") {
+            const projectExists = await tx.project.findFirst({
+              where: {
+                id: projectId,
+                organizationId,
+              },
+              select: { id: true },
+            });
+
+            if (!projectExists) {
+              throw new Error("PROJECT_NOT_FOUND");
+            }
+          }
+
+          return tx.analyticsEvent.findMany({
+            where: {
+              project: {
+                organizationId,
+              },
+              ...(projectId && projectId !== "All"
+                ? { projectId }
+                : {}),
+              ...(createdAtGte
+                ? {
+                    createdAt: {
+                      gte: createdAtGte,
+                    },
+                  }
+                : {}),
+            },
+            orderBy: [
+              { createdAt: "desc" },
+              { id: "desc" },
+            ],
+            take,
+            select: {
+              id: true,
+              eventName: true,
+              userId: true,
+              sessionId: true,
+              properties: true,
+              pageUrl: true,
+              country: true,
+              device: true,
+              browser: true,
+              createdAt: true,
+              projectId: true,
+              project: {
+                select: {
+                  name: true,
+                },
+              },
+            },
+          });
+        },
+      );
     };
 
-    // 4. Fetch initial events.
-    const events = await prisma.analyticsEvent.findMany({
-      where: eventWhere,
-      orderBy: {
-        createdAt: "desc",
-      },
-      take: isSse ? limit : limit,
-      select: {
-        id: true,
-        eventName: true,
-        userId: true,
-        sessionId: true,
-        properties: true,
-        pageUrl: true,
-        country: true,
-        device: true,
-        browser: true,
-        createdAt: true,
-        projectId: true,
-        project: {
-          select: {
-            name: true,
-          },
-        },
-      },
-    });
+    let events: Awaited<ReturnType<typeof fetchEvents>>;
+
+    try {
+      events = await fetchEvents(limit);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === "PROJECT_NOT_FOUND"
+      ) {
+        return NextResponse.json(
+          { error: "Project not found or access denied" },
+          { status: 404 },
+        );
+      }
+
+      throw error;
+    }
 
     const mappedEvents = events.map((event) =>
-      mapEvent(event as LiveEventRecord)
+      mapEvent(event as LiveEventRecord),
     );
 
-    // 5. Return JSON when SSE is not requested.
     if (!isSse) {
       return NextResponse.json({
         success: true,
@@ -161,7 +187,6 @@ export const GET = auth(async function GET(request) {
       });
     }
 
-    // 6. Create Server-Sent Events stream.
     const encoder = new TextEncoder();
 
     let isClosed = false;
@@ -169,12 +194,10 @@ export const GET = auth(async function GET(request) {
 
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
 
-    // Keep track of already delivered event IDs.
     const seenEventIds = new Set<string>(
-      mappedEvents.map((event) => event.id)
+      mappedEvents.map((event) => event.id),
     );
 
-    // Initial cursor: latest event timestamp.
     let lastSeenDate =
       events.length > 0
         ? events[0].createdAt
@@ -187,7 +210,9 @@ export const GET = auth(async function GET(request) {
 
           try {
             controller.enqueue(
-              encoder.encode(`data: ${JSON.stringify(payload)}\n\n`)
+              encoder.encode(
+                `data: ${JSON.stringify(payload)}\n\n`,
+              ),
             );
           } catch {
             closeStream();
@@ -199,7 +224,7 @@ export const GET = auth(async function GET(request) {
 
           try {
             controller.enqueue(
-              encoder.encode(": keepalive\n\n")
+              encoder.encode(": keepalive\n\n"),
             );
           } catch {
             closeStream();
@@ -223,7 +248,6 @@ export const GET = auth(async function GET(request) {
           }
         };
 
-        // Send initial events immediately.
         send({
           success: true,
           data: {
@@ -231,51 +255,16 @@ export const GET = auth(async function GET(request) {
           },
         });
 
-        // Poll for newly inserted events.
         const pollForEvents = async () => {
           if (isClosed || isPolling) return;
 
           isPolling = true;
 
           try {
-            const newEvents = await prisma.analyticsEvent.findMany({
-              where: {
-                ...eventWhere,
-
-                // Include the latest timestamp again to avoid
-                // missing events created at the same timestamp.
-                createdAt: {
-                  gte: lastSeenDate,
-                },
-              },
-              orderBy: [
-                {
-                  createdAt: "desc",
-                },
-                {
-                  id: "desc",
-                },
-              ],
-              take: POLL_LIMIT,
-              select: {
-                id: true,
-                eventName: true,
-                userId: true,
-                sessionId: true,
-                properties: true,
-                pageUrl: true,
-                country: true,
-                device: true,
-                browser: true,
-                createdAt: true,
-                projectId: true,
-                project: {
-                  select: {
-                    name: true,
-                  },
-                },
-              },
-            });
+            const newEvents = await fetchEvents(
+              POLL_LIMIT,
+              lastSeenDate,
+            );
 
             if (isClosed) return;
 
@@ -290,7 +279,6 @@ export const GET = auth(async function GET(request) {
               return true;
             });
 
-            // Advance timestamp cursor.
             for (const event of newEvents) {
               if (event.createdAt > lastSeenDate) {
                 lastSeenDate = event.createdAt;
@@ -302,7 +290,7 @@ export const GET = auth(async function GET(request) {
                 success: true,
                 data: {
                   events: unseenEvents.map((event) =>
-                    mapEvent(event as LiveEventRecord)
+                    mapEvent(event as LiveEventRecord),
                   ),
                 },
               });
@@ -310,10 +298,9 @@ export const GET = auth(async function GET(request) {
               sendHeartbeat();
             }
 
-            // Prevent unbounded memory growth.
             if (seenEventIds.size > 10000) {
               const latestIds = new Set(
-                newEvents.map((event) => String(event.id))
+                newEvents.map((event) => String(event.id)),
               );
 
               seenEventIds.clear();
@@ -331,23 +318,21 @@ export const GET = auth(async function GET(request) {
             if (!isClosed) {
               pollTimer = setTimeout(
                 pollForEvents,
-                POLL_INTERVAL
+                POLL_INTERVAL,
               );
             }
           }
         };
 
-        // Start polling after the initial payload.
         pollTimer = setTimeout(
           pollForEvents,
-          POLL_INTERVAL
+          POLL_INTERVAL,
         );
 
-        // Stop the stream when the client disconnects.
         request.signal.addEventListener(
           "abort",
           closeStream,
-          { once: true }
+          { once: true },
         );
 
         if (request.signal.aborted) {
@@ -379,7 +364,7 @@ export const GET = auth(async function GET(request) {
 
     return NextResponse.json(
       { error: "Failed to fetch live analytics events" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 });

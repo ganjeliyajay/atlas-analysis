@@ -1,7 +1,10 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
+import {
+  withTenantContext,
+  withUserContext,
+} from "@/lib/db-context";
 import { z } from "zod";
 
 const querySchema = z.object({
@@ -66,35 +69,39 @@ function escapeCsv(value: unknown): string {
 export const GET = auth(async function GET(request) {
   try {
     const session = request.auth;
+    const userIdFromSession = session?.user?.id;
 
-    if (!session?.user?.id) {
+    if (!userIdFromSession) {
       return NextResponse.json(
         { error: "Unauthorized" },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
-    // Find user's organization.
-    const membership = await prisma.organizationMember.findFirst({
-      where: {
-        userId: session.user.id,
+    const membership = await withUserContext(
+      userIdFromSession,
+      async (tx) => {
+        return tx.organizationMember.findFirst({
+          where: {
+            userId: userIdFromSession,
+          },
+          select: {
+            organizationId: true,
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+        });
       },
-      select: {
-        organizationId: true,
-      },
-      orderBy: {
-        createdAt: "asc",
-      },
-    });
+    );
 
     if (!membership) {
       return NextResponse.json(
         { error: "Organization not found" },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
-    // Parse query parameters.
     const { searchParams } = new URL(request.url);
 
     const parsed = querySchema.safeParse({
@@ -113,7 +120,7 @@ export const GET = auth(async function GET(request) {
           error: "Invalid query parameters",
           details: parsed.error.flatten(),
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -127,7 +134,6 @@ export const GET = auth(async function GET(request) {
       endDate,
     } = parsed.data;
 
-    // Calculate date range.
     const now = new Date();
     const rangeStart = new Date(now);
 
@@ -165,165 +171,163 @@ export const GET = auth(async function GET(request) {
     ) {
       return NextResponse.json(
         { error: "Invalid date range" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    // Verify project belongs to the organization.
-    if (projectId && projectId !== "All") {
-      const projectExists = await prisma.project.findFirst({
-        where: {
-          id: projectId,
-          organizationId: membership.organizationId,
-        },
-        select: {
-          id: true,
-        },
-      });
-
-      if (!projectExists) {
-        return NextResponse.json(
-          { error: "Project not found or access denied" },
-          { status: 404 }
-        );
-      }
-    }
-
-    // Organization-scoped filters.
-    const where = {
-      project: {
-        organizationId: membership.organizationId,
-      },
-
-      createdAt: {
-        gte: parsedStartDate,
-        lt: parsedEndDateExclusive,
-      },
-
-      ...(projectId && projectId !== "All"
-        ? { projectId }
-        : {}),
-
-      ...(eventName
-        ? {
-            eventName: {
-              equals: eventName,
-              mode: "insensitive" as const,
+    return await withTenantContext(
+      userIdFromSession,
+      membership.organizationId,
+      async (tx) => {
+        if (projectId && projectId !== "All") {
+          const projectExists = await tx.project.findFirst({
+            where: {
+              id: projectId,
+              organizationId: membership.organizationId,
             },
-          }
-        : {}),
-
-      ...(filterUserId
-        ? {
-            userId: {
-              contains: filterUserId,
-              mode: "insensitive" as const,
+            select: {
+              id: true,
             },
-          }
-        : {}),
+          });
 
-      ...(search
-        ? {
-            OR: [
-              {
+          if (!projectExists) {
+            return NextResponse.json(
+              { error: "Project not found or access denied" },
+              { status: 404 },
+            );
+          }
+        }
+
+        const where = {
+          project: {
+            organizationId: membership.organizationId,
+          },
+          createdAt: {
+            gte: parsedStartDate,
+            lt: parsedEndDateExclusive,
+          },
+          ...(projectId && projectId !== "All"
+            ? { projectId }
+            : {}),
+          ...(eventName
+            ? {
                 eventName: {
-                  contains: search,
+                  equals: eventName,
                   mode: "insensitive" as const,
                 },
-              },
-              {
+              }
+            : {}),
+          ...(filterUserId
+            ? {
                 userId: {
-                  contains: search,
+                  contains: filterUserId,
                   mode: "insensitive" as const,
                 },
-              },
-              {
-                id: {
-                  equals: search,
-                },
-              },
-            ],
-          }
-        : {}),
-    };
+              }
+            : {}),
+          ...(search
+            ? {
+                OR: [
+                  {
+                    eventName: {
+                      contains: search,
+                      mode: "insensitive" as const,
+                    },
+                  },
+                  {
+                    userId: {
+                      contains: search,
+                      mode: "insensitive" as const,
+                    },
+                  },
+                  {
+                    id: {
+                      equals: search,
+                    },
+                  },
+                ],
+              }
+            : {}),
+        };
 
-    // Fetch matching events.
-    const events = await prisma.analyticsEvent.findMany({
-      where,
-      orderBy: {
-        createdAt: "desc",
+        const events = await tx.analyticsEvent.findMany({
+          where,
+          orderBy: {
+            createdAt: "desc",
+          },
+          take: 50000,
+          select: {
+            id: true,
+            eventName: true,
+            userId: true,
+            sessionId: true,
+            properties: true,
+            pageUrl: true,
+            country: true,
+            device: true,
+            browser: true,
+            createdAt: true,
+            projectId: true,
+          },
+        });
+
+        const csvHeaders = [
+          "Event ID",
+          "Event Name",
+          "User ID",
+          "Session ID",
+          "Properties",
+          "Page URL",
+          "Country",
+          "Device",
+          "Browser",
+          "Created At",
+          "Project ID",
+        ];
+
+        const rows = events.map((event) =>
+          [
+            event.id,
+            event.eventName,
+            event.userId,
+            event.sessionId,
+            event.properties,
+            event.pageUrl,
+            event.country,
+            event.device,
+            event.browser,
+            event.createdAt,
+            event.projectId,
+          ]
+            .map(escapeCsv)
+            .join(","),
+        );
+
+        const csv = [
+          csvHeaders.map(escapeCsv).join(","),
+          ...rows,
+        ].join("\r\n");
+
+        const filename = `atlas-events-${new Date()
+          .toISOString()
+          .slice(0, 10)}.csv`;
+
+        return new Response("\uFEFF" + csv, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/csv; charset=utf-8",
+            "Content-Disposition": `attachment; filename="${filename}"`,
+            "Cache-Control": "no-store",
+          },
+        });
       },
-      take: 50000,
-      select: {
-        id: true,
-        eventName: true,
-        userId: true,
-        sessionId: true,
-        properties: true,
-        pageUrl: true,
-        country: true,
-        device: true,
-        browser: true,
-        createdAt: true,
-        projectId: true,
-      },
-    });
-
-    const csvHeaders = [
-      "Event ID",
-      "Event Name",
-      "User ID",
-      "Session ID",
-      "Properties",
-      "Page URL",
-      "Country",
-      "Device",
-      "Browser",
-      "Created At",
-      "Project ID",
-    ];
-
-    const rows = events.map((event) =>
-      [
-        event.id,
-        event.eventName,
-        event.userId,
-        event.sessionId,
-        event.properties,
-        event.pageUrl,
-        event.country,
-        event.device,
-        event.browser,
-        event.createdAt,
-        event.projectId,
-      ]
-        .map(escapeCsv)
-        .join(",")
     );
-
-    const csv = [
-      csvHeaders.map(escapeCsv).join(","),
-      ...rows,
-    ].join("\r\n");
-
-    const filename = `atlas-events-${new Date()
-      .toISOString()
-      .slice(0, 10)}.csv`;
-
-    return new Response("\uFEFF" + csv, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${filename}"`,
-        "Cache-Control": "no-store",
-      },
-    });
   } catch (error) {
     console.error("CSV Export API Error:", error);
 
     return NextResponse.json(
       { error: "Failed to export analytics events" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 });

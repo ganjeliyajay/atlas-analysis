@@ -1,33 +1,36 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
+import { prismaOps } from "@/lib/prisma-ops";
 import { Prisma } from "@/lib/generated/prisma/client";
 
 export const GET = auth(async function GET(request) {
   try {
     const session = request.auth;
 
-    // Protect platform-wide monitoring data
+    // Protect platform-wide monitoring data.
     if (!session?.user?.id) {
       return NextResponse.json(
         { error: "Unauthorized" },
-        { status: 401 },
+        { status: 401 }
       );
     }
 
     if (session.user.role !== "superadmin") {
       return NextResponse.json(
         { error: "Forbidden" },
-        { status: 403 },
+        { status: 403 }
       );
     }
 
     const now = new Date();
 
-    const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
+    const fiveMinutesAgo = new Date(
+      now.getTime() - 5 * 60 * 1000
+    );
+
     const twentyFourHoursAgo = new Date(
-      now.getTime() - 24 * 60 * 60 * 1000,
+      now.getTime() - 24 * 60 * 60 * 1000
     );
 
     const [
@@ -37,23 +40,29 @@ export const GET = auth(async function GET(request) {
       projectEventGroups,
       hourlyTrend,
     ] = await Promise.all([
-      // Events ingested in the last 5 minutes
-      prisma.analyticsEvent.count({
+      // Events ingested in the last 5 minutes.
+      prismaOps.analyticsEvent.count({
         where: {
-          createdAt: { gte: fiveMinutesAgo },
+          createdAt: {
+            gte: fiveMinutesAgo,
+          },
         },
       }),
 
-      // Events ingested in the last 24 hours
-      prisma.analyticsEvent.count({
+      // Events ingested in the last 24 hours.
+      prismaOps.analyticsEvent.count({
         where: {
-          createdAt: { gte: twentyFourHoursAgo },
+          createdAt: {
+            gte: twentyFourHoursAgo,
+          },
         },
       }),
 
-      // Latest event recorded in the database
-      prisma.analyticsEvent.findFirst({
-        orderBy: { createdAt: "desc" },
+      // Latest event recorded in the database.
+      prismaOps.analyticsEvent.findFirst({
+        orderBy: {
+          createdAt: "desc",
+        },
         select: {
           id: true,
           eventName: true,
@@ -67,11 +76,13 @@ export const GET = auth(async function GET(request) {
         },
       }),
 
-      // Top projects by event volume in the last 24 hours
-      prisma.analyticsEvent.groupBy({
+      // Top projects by event volume in the last 24 hours.
+      prismaOps.analyticsEvent.groupBy({
         by: ["projectId"],
         where: {
-          createdAt: { gte: twentyFourHoursAgo },
+          createdAt: {
+            gte: twentyFourHoursAgo,
+          },
         },
         _count: {
           _all: true,
@@ -84,8 +95,8 @@ export const GET = auth(async function GET(request) {
         take: 10,
       }),
 
-      // Events per hour over the last 24 hours
-      prisma.$queryRaw<
+      // Events per hour over the last 24 hours.
+      prismaOps.$queryRaw<
         { hour: Date; count: bigint }[]
       >(Prisma.sql`
         SELECT
@@ -98,15 +109,17 @@ export const GET = auth(async function GET(request) {
       `),
     ]);
 
-    // Resolve project names for the project volume chart
+    // Resolve project names for the project volume chart.
     const projectIds = projectEventGroups.map(
-      (item) => item.projectId,
+      (item) => item.projectId
     );
 
     const projects = projectIds.length
-      ? await prisma.project.findMany({
+      ? await prismaOps.project.findMany({
           where: {
-            id: { in: projectIds },
+            id: {
+              in: projectIds,
+            },
           },
           select: {
             id: true,
@@ -116,7 +129,10 @@ export const GET = auth(async function GET(request) {
       : [];
 
     const projectNameMap = new Map(
-      projects.map((project) => [project.id, project.name]),
+      projects.map((project) => [
+        project.id,
+        project.name,
+      ])
     );
 
     const projectVolumes = projectEventGroups.map((item) => ({
@@ -133,7 +149,8 @@ export const GET = auth(async function GET(request) {
       metrics: {
         eventsLast5Minutes,
         eventsLast24Hours,
-        latestEventAt: latestEvent?.createdAt.toISOString() ?? null,
+        latestEventAt:
+          latestEvent?.createdAt.toISOString() ?? null,
       },
 
       latestEvent: latestEvent
@@ -157,7 +174,7 @@ export const GET = auth(async function GET(request) {
 
     return NextResponse.json(
       { error: "Failed to load ingestion monitoring data" },
-      { status: 500 },
+      { status: 500 }
     );
   }
 });

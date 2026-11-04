@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
@@ -25,7 +26,6 @@ export async function POST(request: Request) {
     }
 
     const { fullName, workEmail, password } = validation.data;
-
     const email = workEmail.toLowerCase();
 
     const existingUser = await prisma.user.findUnique({
@@ -41,10 +41,8 @@ export async function POST(request: Request) {
 
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    // Generate a workspace name from the user's name.
     const organizationName = `${fullName}'s Workspace`;
 
-    // Generate a URL-friendly organization slug.
     const baseSlug = fullName
       .toLowerCase()
       .trim()
@@ -53,7 +51,7 @@ export async function POST(request: Request) {
 
     const uniqueSlug = `${baseSlug || "workspace"}-${crypto.randomUUID().slice(0, 8)}`;
 
-    // Create user, organization, and owner membership atomically.
+    // Create user, organization and owner membership atomically.
     const result = await prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
@@ -62,6 +60,11 @@ export async function POST(request: Request) {
           password: hashedPassword,
         },
       });
+
+      // Set transaction-local user context for RLS.
+      await tx.$queryRaw`
+        SELECT set_config('app.user_id', ${user.id}, true)
+      `;
 
       const organization = await tx.organization.create({
         data: {

@@ -1,7 +1,10 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
+import {
+  withTenantContext,
+  withUserContext,
+} from "@/lib/db-context";
 import { Prisma } from "@/lib/generated/prisma/client";
 
 type Range = "today" | "7d" | "30d" | "90d";
@@ -54,6 +57,7 @@ function escapeCsv(value: unknown): string {
 
 export const GET = auth(async function GET(request, context) {
   try {
+    // 1. Authentication
     const session = request.auth;
 
     if (!session?.user?.id) {
@@ -63,7 +67,19 @@ export const GET = auth(async function GET(request, context) {
       );
     }
 
+    const authUserId = session.user.id;
+
+    // 2. Route parameters
     const { projectId } = await context.params;
+
+    if (!projectId) {
+      return NextResponse.json(
+        { error: "Project ID is required" },
+        { status: 400 }
+      );
+    }
+
+    // 3. Query parameters
     const searchParams = new URL(request.url).searchParams;
 
     const rangeParam = searchParams.get("range");
@@ -87,23 +103,29 @@ export const GET = auth(async function GET(request, context) {
       formatParam === "csv" ? "csv" : "json";
 
     const eventNameFilter =
-      searchParams.get("eventName")?.trim().slice(0, 200) || null;
+      searchParams.get("eventName")?.trim().slice(0, 200) ||
+      null;
 
     const userIdFilter =
-      searchParams.get("userId")?.trim().slice(0, 200) || null;
+      searchParams.get("userId")?.trim().slice(0, 200) ||
+      null;
 
-    // Find user's organization.
-    const membership = await prisma.organizationMember.findFirst({
-      where: {
-        userId: session.user.id,
-      },
-      orderBy: {
-        createdAt: "asc",
-      },
-      select: {
-        organizationId: true,
-      },
-    });
+    // 4. Find user's organization
+    const membership = await withUserContext(
+      authUserId,
+      (tx) =>
+        tx.organizationMember.findFirst({
+          where: {
+            userId: authUserId,
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+          select: {
+            organizationId: true,
+          },
+        })
+    );
 
     if (!membership) {
       return NextResponse.json(
@@ -112,159 +134,192 @@ export const GET = auth(async function GET(request, context) {
       );
     }
 
-    // Verify project ownership.
-    const project = await prisma.project.findFirst({
-      where: {
-        id: projectId,
-        organizationId: membership.organizationId,
-      },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-      },
-    });
+    // 5. Project validation and export queries
+    const result = await withTenantContext(
+      authUserId,
+      membership.organizationId,
+      async (tx) => {
+        // Verify project ownership
+        const project = await tx.project.findFirst({
+          where: {
+            id: projectId,
+            organizationId: membership.organizationId,
+          },
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+          },
+        });
 
-    if (!project) {
+        if (!project) {
+          return {
+            projectNotFound: true as const,
+          };
+        }
+
+        const startDate = getRangeStart(range);
+
+        const where: Prisma.AnalyticsEventWhereInput = {
+          projectId: project.id,
+          createdAt: {
+            gte: startDate,
+          },
+          ...(eventNameFilter
+            ? { eventName: eventNameFilter }
+            : {}),
+          ...(userIdFilter
+            ? { userId: userIdFilter }
+            : {}),
+        };
+
+        // Fetch analytics
+        const [
+          totalEvents,
+          activeUsers,
+          groupedEvents,
+          dailyEventCounts,
+          recentEvents,
+        ] = await Promise.all([
+          tx.analyticsEvent.count({ where }),
+
+          tx.analyticsEvent.groupBy({
+            by: ["userId"],
+            where: {
+              ...where,
+              userId: {
+                not: null,
+              },
+            },
+          }),
+
+          tx.analyticsEvent.groupBy({
+            by: ["eventName"],
+            where,
+            _count: {
+              _all: true,
+            },
+          }),
+
+          // Daily event volume
+          tx.$queryRaw<
+            Array<{
+              day: Date;
+              count: bigint;
+            }>
+          >(Prisma.sql`
+            SELECT
+              DATE_TRUNC('day', "createdAt") AS day,
+              COUNT(*)::bigint AS count
+            FROM "AnalyticsEvent"
+            WHERE "projectId" = ${project.id}
+              AND "createdAt" >= ${startDate}
+              ${
+                eventNameFilter
+                  ? Prisma.sql`AND "eventName" = ${eventNameFilter}`
+                  : Prisma.empty
+              }
+              ${
+                userIdFilter
+                  ? Prisma.sql`AND "userId" = ${userIdFilter}`
+                  : Prisma.empty
+              }
+            GROUP BY DATE_TRUNC('day', "createdAt")
+            ORDER BY day ASC
+          `),
+
+          tx.analyticsEvent.findMany({
+            where,
+            orderBy: {
+              createdAt: "desc",
+            },
+            take: 1000,
+            select: {
+              id: true,
+              eventName: true,
+              userId: true,
+              createdAt: true,
+            },
+          }),
+        ]);
+
+        const eventsOverTime = dailyEventCounts.map(
+          (item) => ({
+            date: item.day.toISOString().slice(0, 10),
+            eventVolume: Number(item.count),
+          })
+        );
+
+        const topEvents = groupedEvents
+          .map((event) => ({
+            name: event.eventName,
+            count: event._count._all,
+            percentage:
+              totalEvents > 0
+                ? Math.round(
+                    (event._count._all / totalEvents) * 100
+                  )
+                : 0,
+          }))
+          .sort((a, b) => b.count - a.count);
+
+        const exportData = {
+          project,
+          exportedAt: new Date().toISOString(),
+          range,
+          filters: {
+            eventName: eventNameFilter,
+            userId: userIdFilter,
+          },
+          kpis: {
+            totalEvents,
+            activeUsers: activeUsers.length,
+            eventsPerUser:
+              activeUsers.length > 0
+                ? Number(
+                    (totalEvents / activeUsers.length).toFixed(2)
+                  )
+                : 0,
+          },
+          eventsOverTime,
+          topEvents,
+          recentEvents: recentEvents.map((event) => ({
+            id: event.id,
+            eventName: event.eventName,
+            userId: event.userId,
+            createdAt: event.createdAt.toISOString(),
+          })),
+          exportLimits: {
+            recentEventsLimit: 1000,
+            note: "Recent events are limited to the latest 1000 records.",
+          },
+        };
+
+        return {
+          projectNotFound: false as const,
+          project,
+          totalEvents,
+          activeUsersCount: activeUsers.length,
+          exportData,
+        };
+      }
+    );
+
+    if (result.projectNotFound) {
       return NextResponse.json(
         { error: "Project not found or access denied" },
         { status: 404 }
       );
     }
 
-    const startDate = getRangeStart(range);
-
-    const where: Prisma.AnalyticsEventWhereInput = {
-      projectId: project.id,
-      createdAt: {
-        gte: startDate,
-      },
-      ...(eventNameFilter
-        ? { eventName: eventNameFilter }
-        : {}),
-      ...(userIdFilter
-        ? { userId: userIdFilter }
-        : {}),
-    };
-
-    const [
-      totalEvents,
-      activeUsers,
-      groupedEvents,
-      dailyEventCounts,
-      recentEvents,
-    ] = await Promise.all([
-      prisma.analyticsEvent.count({ where }),
-
-      prisma.analyticsEvent.groupBy({
-        by: ["userId"],
-        where: {
-          ...where,
-          userId: {
-            not: null,
-          },
-        },
-      }),
-
-      prisma.analyticsEvent.groupBy({
-        by: ["eventName"],
-        where,
-        _count: {
-          _all: true,
-        },
-      }),
-
-      prisma.$queryRaw<
-        Array<{
-          day: Date;
-          count: bigint;
-        }>
-      >(Prisma.sql`
-        SELECT
-          DATE_TRUNC('day', "createdAt") AS day,
-          COUNT(*)::bigint AS count
-        FROM "AnalyticsEvent"
-        WHERE "projectId" = ${project.id}
-          AND "createdAt" >= ${startDate}
-          ${
-            eventNameFilter
-              ? Prisma.sql`AND "eventName" = ${eventNameFilter}`
-              : Prisma.empty
-          }
-          ${
-            userIdFilter
-              ? Prisma.sql`AND "userId" = ${userIdFilter}`
-              : Prisma.empty
-          }
-        GROUP BY DATE_TRUNC('day', "createdAt")
-        ORDER BY day ASC
-      `),
-
-      prisma.analyticsEvent.findMany({
-        where,
-        orderBy: {
-          createdAt: "desc",
-        },
-        take: 1000,
-        select: {
-          id: true,
-          eventName: true,
-          userId: true,
-          createdAt: true,
-        },
-      }),
-    ]);
-
-    const eventsOverTime = dailyEventCounts.map((item) => ({
-      date: item.day.toISOString().slice(0, 10),
-      eventVolume: Number(item.count),
-    }));
-
-    const topEvents = groupedEvents
-      .map((event) => ({
-        name: event.eventName,
-        count: event._count._all,
-        percentage:
-          totalEvents > 0
-            ? Math.round(
-                (event._count._all / totalEvents) * 100
-              )
-            : 0,
-      }))
-      .sort((a, b) => b.count - a.count);
-
-    const exportData = {
+    const {
       project,
-      exportedAt: new Date().toISOString(),
-      range,
-      filters: {
-        eventName: eventNameFilter,
-        userId: userIdFilter,
-      },
-      kpis: {
-        totalEvents,
-        activeUsers: activeUsers.length,
-        eventsPerUser:
-          activeUsers.length > 0
-            ? Number(
-                (totalEvents / activeUsers.length).toFixed(2)
-              )
-            : 0,
-      },
-      eventsOverTime,
-      topEvents,
-      recentEvents: recentEvents.map((event) => ({
-        id: event.id,
-        eventName: event.eventName,
-        userId: event.userId,
-        createdAt: event.createdAt.toISOString(),
-      })),
-      exportLimits: {
-        recentEventsLimit: 1000,
-        note: "Recent events are limited to the latest 1000 records.",
-      },
-    };
+      totalEvents,
+      activeUsersCount,
+      exportData,
+    } = result;
 
+    // 6. CSV export
     if (format === "csv") {
       const rows: unknown[][] = [
         [
@@ -301,14 +356,14 @@ export const GET = auth(async function GET(request, context) {
       rows.push([
         "KPI",
         "Active Users",
-        activeUsers.length,
+        activeUsersCount,
         "",
         "",
         "",
         "",
       ]);
 
-      for (const event of eventsOverTime) {
+      for (const event of exportData.eventsOverTime) {
         rows.push([
           "Events Over Time",
           "",
@@ -320,7 +375,7 @@ export const GET = auth(async function GET(request, context) {
         ]);
       }
 
-      for (const event of topEvents) {
+      for (const event of exportData.topEvents) {
         rows.push([
           "Top Event",
           event.name,
@@ -358,6 +413,7 @@ export const GET = auth(async function GET(request, context) {
       });
     }
 
+    // 7. JSON export
     return new Response(
       JSON.stringify(exportData, null, 2),
       {

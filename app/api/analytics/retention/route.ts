@@ -1,5 +1,9 @@
+
 import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
+import {
+  withTenantContext,
+  withUserContext,
+} from "@/lib/db-context";
 import { NextResponse } from "next/server";
 
 const PERIOD_COUNT = 8;
@@ -13,9 +17,19 @@ type EventRecord = {
   createdAt: Date;
 };
 
+const RANGE_DAYS: Record<Period, number> = {
+  daily: 1,
+  weekly: 7,
+  monthly: 30,
+};
+
 function getUtcDay(date: Date) {
   return new Date(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+    Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate(),
+    ),
   );
 }
 
@@ -23,7 +37,7 @@ function getUtcWeek(date: Date) {
   const day = getUtcDay(date);
   const dayOfWeek = day.getUTCDay();
 
-  // Monday is the first day of the week
+  // Monday is the first day of the week.
   const daysSinceMonday = (dayOfWeek + 6) % 7;
   day.setUTCDate(day.getUTCDate() - daysSinceMonday);
 
@@ -31,7 +45,9 @@ function getUtcWeek(date: Date) {
 }
 
 function getUtcMonth(date: Date) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1),
+  );
 }
 
 function getBucketStart(date: Date, period: Period) {
@@ -57,7 +73,7 @@ function addPeriods(date: Date, count: number, period: Period) {
 function formatBucket(date: Date, period: Period) {
   if (period === "monthly") {
     return `${date.getUTCFullYear()}-${String(
-      date.getUTCMonth() + 1
+      date.getUTCMonth() + 1,
     ).padStart(2, "0")}`;
   }
 
@@ -81,14 +97,16 @@ function getMetricEvents(events: EventRecord[], metric: Metric) {
     return events;
   }
 
-  return events.filter((event) => isCoreActionEvent(event.eventName));
+  return events.filter((event) =>
+    isCoreActionEvent(event.eventName),
+  );
 }
 
 function calculateRetention(
   users: string[],
   userEvents: Map<string, Date[]>,
   periodStart: Date,
-  periodEnd: Date
+  periodEnd: Date,
 ) {
   if (users.length === 0) return null;
 
@@ -98,7 +116,8 @@ function calculateRetention(
     const events = userEvents.get(userId) ?? [];
 
     const hasActivity = events.some(
-      (eventDate) => eventDate >= periodStart && eventDate < periodEnd
+      (eventDate) =>
+        eventDate >= periodStart && eventDate < periodEnd,
     );
 
     if (hasActivity) {
@@ -108,7 +127,9 @@ function calculateRetention(
 
   return {
     retainedUsers,
-    percentage: Number(((retainedUsers / users.length) * 100).toFixed(2)),
+    percentage: Number(
+      ((retainedUsers / users.length) * 100).toFixed(2),
+    ),
   };
 }
 
@@ -119,20 +140,31 @@ export const GET = auth(async function GET(request) {
     if (!authUserId) {
       return NextResponse.json(
         { success: false, message: "Unauthorized" },
-        { status: 401 }
+        { status: 401 },
       );
     }
 
-    const membership = await prisma.organizationMember.findFirst({
-      where: { userId: authUserId },
-      select: { organizationId: true },
-      orderBy: { createdAt: "asc" },
-    });
+    const membership = await withUserContext(
+      authUserId,
+      async (tx) => {
+        return tx.organizationMember.findFirst({
+          where: {
+            userId: authUserId,
+          },
+          select: {
+            organizationId: true,
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+        });
+      },
+    );
 
     if (!membership) {
       return NextResponse.json(
         { success: false, message: "Organization not found" },
-        { status: 404 }
+        { status: 404 },
       );
     }
 
@@ -175,258 +207,305 @@ export const GET = auth(async function GET(request) {
     ) {
       return NextResponse.json(
         { success: false, message: "Invalid date range" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
-    // Verify project belongs to the user's organization.
-    if (projectId && projectId !== "All") {
-      const project = await prisma.project.findFirst({
-        where: {
-          id: projectId,
-          organizationId: membership.organizationId,
-        },
-        select: { id: true },
-      });
+    return await withTenantContext(
+      authUserId,
+      membership.organizationId,
+      async (tx) => {
+        // Verify that the selected project belongs to this organization.
+        if (projectId && projectId !== "All") {
+          const project = await tx.project.findFirst({
+            where: {
+              id: projectId,
+              organizationId: membership.organizationId,
+            },
+            select: {
+              id: true,
+            },
+          });
 
-      if (!project) {
-        return NextResponse.json(
-          { success: false, message: "Project not found" },
-          { status: 404 }
-        );
-      }
-    }
-
-    const projectFilter = {
-      project: {
-        organizationId: membership.organizationId,
-      },
-      ...(projectId && projectId !== "All" ? { projectId } : {}),
-    };
-
-    /*
-     * Fetch all historical identified events in the organization/project.
-     *
-     * Important:
-     * We need historical events to determine each user's first activity.
-     * The requested date range is applied to cohorts after first activity
-     * has been calculated.
-     */
-    const rawEvents = await prisma.analyticsEvent.findMany({
-      where: {
-        ...projectFilter,
-        userId: { not: null },
-      },
-      select: {
-        userId: true,
-        eventName: true,
-        createdAt: true,
-      },
-      orderBy: {
-        createdAt: "asc",
-      },
-    });
-
-    const events = getMetricEvents(rawEvents, metric) as EventRecord[];
-
-    // userId -> all event timestamps
-    const userEvents = new Map<string, Date[]>();
-
-    // userId -> first activity timestamp
-    const firstSeen = new Map<string, Date>();
-
-    for (const event of events) {
-      if (!event.userId) continue;
-
-      const timestamps = userEvents.get(event.userId) ?? [];
-      timestamps.push(event.createdAt);
-      userEvents.set(event.userId, timestamps);
-
-      if (!firstSeen.has(event.userId)) {
-        firstSeen.set(event.userId, event.createdAt);
-      }
-    }
-
-    // Cohort users are users whose first activity falls within the range.
-    const cohortUsers = new Map<string, string[]>();
-
-    for (const [userId, firstActivity] of firstSeen.entries()) {
-      if (firstActivity < startDate || firstActivity > endDate) {
-        continue;
-      }
-
-      const bucket = getBucketStart(firstActivity, period);
-      const bucketKey = formatBucket(bucket, period);
-
-      const users = cohortUsers.get(bucketKey) ?? [];
-      users.push(userId);
-
-      cohortUsers.set(bucketKey, users);
-    }
-
-    const sortedCohorts = Array.from(cohortUsers.entries()).sort(
-      ([a], [b]) => a.localeCompare(b)
-    );
-
-    const cohorts = sortedCohorts.map(([cohortDate, users]) => {
-      const bucketStart = new Date(`${cohortDate}T00:00:00.000Z`);
-
-      const periods: (number | null)[] = [];
-      const retainedCounts: (number | null)[] = [];
-
-      for (let index = 0; index < PERIOD_COUNT; index++) {
-        const targetStart = addPeriods(bucketStart, index, period);
-        const targetEnd = addPeriods(bucketStart, index + 1, period);
-
-        // Period 0 is the cohort's first activity period.
-        if (index === 0) {
-          periods.push(100);
-          retainedCounts.push(users.length);
-          continue;
+          if (!project) {
+            return NextResponse.json(
+              { success: false, message: "Project not found" },
+              { status: 404 },
+            );
+          }
         }
 
-        // Avoid showing incomplete periods as 0% retention.
-        if (targetEnd > now) {
-          periods.push(null);
-          retainedCounts.push(null);
-          continue;
-        }
-
-        const result = calculateRetention(
-          users,
-          userEvents,
-          targetStart,
-          targetEnd
-        );
-
-        periods.push(result?.percentage ?? 0);
-        retainedCounts.push(result?.retainedUsers ?? 0);
-      }
-
-      return {
-        cohortDate,
-        totalUsers: users.length,
-        periods,
-        retainedCounts,
-      };
-    });
-
-    // Calculate KPI retention for a specific period offset.
-    function calculateKpi(offset: number) {
-      const eligibleUsers: string[] = [];
-
-      for (const [userId, firstActivity] of firstSeen.entries()) {
-        if (firstActivity < startDate || firstActivity > endDate) {
-          continue;
-        }
-
-        const cohortStart = getBucketStart(firstActivity, period);
-        const targetEnd = addPeriods(cohortStart, offset + 1, period);
-
-        // Only include fully completed target periods.
-        if (targetEnd <= now) {
-          eligibleUsers.push(userId);
-        }
-      }
-
-      if (eligibleUsers.length === 0) return 0;
-
-      let retainedUsers = 0;
-
-      for (const userId of eligibleUsers) {
-        const firstActivity = firstSeen.get(userId)!;
-        const cohortStart = getBucketStart(firstActivity, period);
-
-        const targetStart = addPeriods(cohortStart, offset, period);
-        const targetEnd = addPeriods(cohortStart, offset + 1, period);
-
-        const userActivity = userEvents.get(userId) ?? [];
-
-        const returned = userActivity.some(
-          (eventDate) =>
-            eventDate >= targetStart && eventDate < targetEnd
-        );
-
-        if (returned) retainedUsers++;
-      }
-
-      return Number(
-        ((retainedUsers / eligibleUsers.length) * 100).toFixed(2)
-      );
-    }
-
-    // Aggregate the retention curve, weighted by cohort size.
-    const retentionCurve = Array.from(
-      { length: PERIOD_COUNT },
-      (_, index) => {
-        let totalUsers = 0;
-        let retainedUsers = 0;
-
-        for (const cohort of cohorts) {
-          const count = cohort.retainedCounts[index];
-
-          if (count === null || count === undefined) continue;
-
-          totalUsers += cohort.totalUsers;
-          retainedUsers += count;
-        }
-
-        const value =
-          totalUsers === 0
-            ? 0
-            : Number(((retainedUsers / totalUsers) * 100).toFixed(2));
-
-        return {
-          label:
-            period === "daily"
-              ? `Day ${index}`
-              : period === "weekly"
-                ? `Week ${index}`
-                : `Month ${index}`,
-          date: index.toString(),
-          value,
+        const projectFilter = {
+          project: {
+            organizationId: membership.organizationId,
+          },
+          ...(projectId && projectId !== "All"
+            ? { projectId }
+            : {}),
         };
-      }
-    );
 
-    const averageCohortSize =
-      cohorts.length === 0
-        ? 0
-        : Number(
-            (
-              cohorts.reduce((sum, cohort) => sum + cohort.totalUsers, 0) /
-              cohorts.length
-            ).toFixed(2)
+        /*
+         * Fetch all historical identified events in the organization/project.
+         * Historical events are required to determine each user's first activity.
+         * The requested date range is applied to cohorts after first activity
+         * has been calculated.
+         */
+        const rawEvents = await tx.analyticsEvent.findMany({
+          where: {
+            ...projectFilter,
+            userId: {
+              not: null,
+            },
+          },
+          select: {
+            userId: true,
+            eventName: true,
+            createdAt: true,
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+        });
+
+        const events = getMetricEvents(
+          rawEvents as EventRecord[],
+          metric,
+        );
+
+        // userId -> all event timestamps
+        const userEvents = new Map<string, Date[]>();
+
+        // userId -> first activity timestamp
+        const firstSeen = new Map<string, Date>();
+
+        for (const event of events) {
+          if (!event.userId) continue;
+
+          const timestamps = userEvents.get(event.userId) ?? [];
+          timestamps.push(event.createdAt);
+          userEvents.set(event.userId, timestamps);
+
+          if (!firstSeen.has(event.userId)) {
+            firstSeen.set(event.userId, event.createdAt);
+          }
+        }
+
+        // Cohort users are users whose first activity falls within the range.
+        const cohortUsers = new Map<string, string[]>();
+
+        for (const [userId, firstActivity] of firstSeen.entries()) {
+          if (firstActivity < startDate || firstActivity > endDate) {
+            continue;
+          }
+
+          const bucket = getBucketStart(firstActivity, period);
+          const bucketKey = formatBucket(bucket, period);
+
+          const users = cohortUsers.get(bucketKey) ?? [];
+          users.push(userId);
+          cohortUsers.set(bucketKey, users);
+        }
+
+        const sortedCohorts = Array.from(cohortUsers.entries()).sort(
+          ([a], [b]) => a.localeCompare(b),
+        );
+
+        const cohorts = sortedCohorts.map(([cohortDate, users]) => {
+          const bucketStart = new Date(
+            `${cohortDate}T00:00:00.000Z`,
           );
 
-    return NextResponse.json({
-      success: true,
-      data: {
-        kpis: {
-          day1Retention: calculateKpi(1),
-          week1Retention: calculateKpi(1),
-          week4Retention: calculateKpi(4),
-          averageCohortSize,
-        },
-        retentionCurve,
-        cohorts,
-        summary: {
-          totalCohorts: cohorts.length,
-          totalUsers: cohorts.reduce(
-            (sum, cohort) => sum + cohort.totalUsers,
-            0
-          ),
-          period,
-          metric,
-          startDate: startDate.toISOString(),
-          endDate: endDate.toISOString(),
-        },
-        metricDefinition:
-          metric === "core_action"
-            ? "Core Action excludes passive events such as page_view, screen_view, session_start, session_end, and heartbeat."
-            : "Any Event includes all identified-user events.",
+          const periods: (number | null)[] = [];
+          const retainedCounts: (number | null)[] = [];
+
+          for (let index = 0; index < PERIOD_COUNT; index++) {
+            const targetStart = addPeriods(
+              bucketStart,
+              index,
+              period,
+            );
+
+            const targetEnd = addPeriods(
+              bucketStart,
+              index + 1,
+              period,
+            );
+
+            // Period 0 is the cohort's first activity period.
+            if (index === 0) {
+              periods.push(100);
+              retainedCounts.push(users.length);
+              continue;
+            }
+
+            // Avoid showing incomplete periods as 0% retention.
+            if (targetEnd > now) {
+              periods.push(null);
+              retainedCounts.push(null);
+              continue;
+            }
+
+            const result = calculateRetention(
+              users,
+              userEvents,
+              targetStart,
+              targetEnd,
+            );
+
+            periods.push(result?.percentage ?? 0);
+            retainedCounts.push(result?.retainedUsers ?? 0);
+          }
+
+          return {
+            cohortDate,
+            totalUsers: users.length,
+            periods,
+            retainedCounts,
+          };
+        });
+
+        // Calculate KPI retention for a specific period offset.
+        function calculateKpi(offset: number) {
+          const eligibleUsers: string[] = [];
+
+          for (const [userId, firstActivity] of firstSeen.entries()) {
+            if (firstActivity < startDate || firstActivity > endDate) {
+              continue;
+            }
+
+            const cohortStart = getBucketStart(
+              firstActivity,
+              period,
+            );
+
+            const targetEnd = addPeriods(
+              cohortStart,
+              offset + 1,
+              period,
+            );
+
+            // Only include fully completed target periods.
+            if (targetEnd <= now) {
+              eligibleUsers.push(userId);
+            }
+          }
+
+          if (eligibleUsers.length === 0) return 0;
+
+          let retainedUsers = 0;
+
+          for (const userId of eligibleUsers) {
+            const firstActivity = firstSeen.get(userId)!;
+            const cohortStart = getBucketStart(
+              firstActivity,
+              period,
+            );
+
+            const targetStart = addPeriods(
+              cohortStart,
+              offset,
+              period,
+            );
+
+            const targetEnd = addPeriods(
+              cohortStart,
+              offset + 1,
+              period,
+            );
+
+            const userActivity = userEvents.get(userId) ?? [];
+
+            const returned = userActivity.some(
+              (eventDate) =>
+                eventDate >= targetStart && eventDate < targetEnd,
+            );
+
+            if (returned) retainedUsers++;
+          }
+
+          return Number(
+            ((retainedUsers / eligibleUsers.length) * 100).toFixed(2),
+          );
+        }
+
+        // Aggregate the retention curve, weighted by cohort size.
+        const retentionCurve = Array.from(
+          { length: PERIOD_COUNT },
+          (_, index) => {
+            let totalUsers = 0;
+            let retainedUsers = 0;
+
+            for (const cohort of cohorts) {
+              const count = cohort.retainedCounts[index];
+
+              if (count === null || count === undefined) continue;
+
+              totalUsers += cohort.totalUsers;
+              retainedUsers += count;
+            }
+
+            const value =
+              totalUsers === 0
+                ? 0
+                : Number(
+                    ((retainedUsers / totalUsers) * 100).toFixed(2),
+                  );
+
+            return {
+              label:
+                period === "daily"
+                  ? `Day ${index}`
+                  : period === "weekly"
+                    ? `Week ${index}`
+                    : `Month ${index}`,
+              date: index.toString(),
+              value,
+            };
+          },
+        );
+
+        const averageCohortSize =
+          cohorts.length === 0
+            ? 0
+            : Number(
+                (
+                  cohorts.reduce(
+                    (sum, cohort) => sum + cohort.totalUsers,
+                    0,
+                  ) / cohorts.length
+                ).toFixed(2),
+              );
+
+        return NextResponse.json({
+          success: true,
+          data: {
+            kpis: {
+              day1Retention: calculateKpi(1),
+              week1Retention: calculateKpi(1),
+              week4Retention: calculateKpi(4),
+              averageCohortSize,
+            },
+            retentionCurve,
+            cohorts,
+            summary: {
+              totalCohorts: cohorts.length,
+              totalUsers: cohorts.reduce(
+                (sum, cohort) => sum + cohort.totalUsers,
+                0,
+              ),
+              period,
+              metric,
+              startDate: startDate.toISOString(),
+              endDate: endDate.toISOString(),
+            },
+            metricDefinition:
+              metric === "core_action"
+                ? "Core Action excludes passive events such as page_view, screen_view, session_start, session_end, and heartbeat."
+                : "Any Event includes all identified-user events.",
+          },
+        });
       },
-    });
+    );
   } catch (error) {
     console.error("Retention analytics error:", error);
 
@@ -435,7 +514,7 @@ export const GET = auth(async function GET(request) {
         success: false,
         message: "Failed to fetch retention analytics",
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 });
