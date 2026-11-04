@@ -2,22 +2,11 @@
 
 import React, { useState } from 'react';
 import {
-  ShieldAlert,
   Search,
-  Filter,
-  CheckCircle2,
-  AlertTriangle,
   Server,
-  Database,
   HardDrive,
   Users,
   Activity,
-  Layers,
-  ArrowUpDown,
-  MoreVertical,
-  Check,
-  X,
-  Sparkles,
 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -199,10 +188,10 @@ export default function OpsConsolePage() {
             <thead className="border-b border-slate-800 bg-slate-900/90 text-slate-400">
               <tr>
                 <th className="py-3 px-4 font-semibold">Tenant Organization</th>
-                <th className="py-3 px-4 font-semibold">Owner Contact</th>
-                <th className="py-3 px-4 font-semibold">Tier</th>
+                <th className="hidden sm:table-cell py-3 px-4 font-semibold">Owner Contact</th>
+                <th className="hidden md:table-cell py-3 px-4 font-semibold">Tier</th>
                 <th className="py-3 px-4 font-semibold text-right">Event Volume</th>
-                <th className="py-3 px-4 font-semibold">Quota Usage</th>
+                <th className="hidden lg:table-cell py-3 px-4 font-semibold">Quota Usage</th>
                 <th className="py-3 px-4 font-semibold text-center">Status</th>
                 <th className="py-3 px-4 font-semibold text-right">Governance</th>
               </tr>
@@ -220,11 +209,11 @@ export default function OpsConsolePage() {
                     </div>
                     <div className="font-mono text-[10px] text-slate-500">{t.id}</div>
                   </td>
-                  <td className="py-3 px-4 font-sans">
+                  <td className="hidden sm:table-cell py-3 px-4 font-sans">
                     <div className="text-slate-200">{t.ownerName}</div>
                     <div className="text-[10px] text-slate-400">{t.ownerEmail}</div>
                   </td>
-                  <td className="py-3 px-4 font-sans">
+                  <td className="hidden md:table-cell py-3 px-4 font-sans">
                     <Badge
                       variant={
                         t.tier === 'Enterprise'
@@ -240,7 +229,7 @@ export default function OpsConsolePage() {
                   <td className="py-3 px-4 text-right font-bold text-white">
                     {t.eventVolume.toLocaleString()}
                   </td>
-                  <td className="py-3 px-4 min-w-[140px]">
+                  <td className="hidden lg:table-cell py-3 px-4 min-w-[140px]">
                     <div className="flex justify-between text-[10px] mb-1 font-sans">
                       <span className="text-slate-400">{t.usagePercentage}%</span>
                       <span className="text-slate-500">

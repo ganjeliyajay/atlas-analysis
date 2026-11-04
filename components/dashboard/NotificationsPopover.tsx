@@ -51,7 +51,7 @@ export function NotificationsPopover({ isOpen, onClose }: NotificationsPopoverPr
   ];
 
   return (
-    <div className="absolute right-0 top-12 z-50 w-80 sm:w-96 rounded-xl border border-slate-700 bg-[#0F172A] shadow-2xl overflow-hidden">
+    <div className="absolute right-0 top-12 z-50 w-[calc(100vw-2rem)] sm:w-96 max-w-sm rounded-xl border border-slate-700 bg-[#0F172A] shadow-2xl overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
         <div className="flex items-center gap-2">
           <Bell className="h-4 w-4 text-indigo-400" />

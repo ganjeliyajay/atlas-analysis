@@ -4,15 +4,11 @@ import {
   Activity,
   ArrowRight,
   BarChart3,
-  Layers,
   Filter,
   Calendar,
   ShieldCheck,
-  Zap,
-  Globe,
   Terminal,
   Users,
-  CheckCircle,
   Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';

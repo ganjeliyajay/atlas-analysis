@@ -493,9 +493,10 @@ export function DashboardHeader({
             </button>
 
             {projectMenuOpen && (
-              <div className="absolute right-0 top-10 z-30 w-56 rounded-xl border border-slate-700 bg-[#0F172A] p-1.5 shadow-2xl">
+              <div className="absolute right-0 top-10 z-30 w-56 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-700 bg-[#0F172A] p-1.5 shadow-2xl">
                 <div className="px-2 py-1 text-[10px] font-semibold uppercase text-slate-400">
-                  Select Project                </div>
+                  Select Project
+                </div>
                 {projectsLoading ? (
                   <div className="px-2.5 py-3 text-xs text-slate-400">
                     Loading projects...
@@ -538,113 +539,59 @@ export function DashboardHeader({
             )}
           </div>
 
-
           {/* Date Range Selector */}
-
           <div className="relative">
-
             <button
-
               onClick={() => {
-
                 setRangeMenuOpen(!rangeMenuOpen);
-
                 setProjectMenuOpen(false);
-
                 setProfileMenuOpen(false);
-
                 setNotificationsOpen(false);
-
               }}
-
-              className="flex items-center gap-1.5 rounded-lg border border-slate-700/80 bg-slate-900/80 px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:border-slate-600 hover:bg-slate-800 transition-colors"
-
+              className="flex items-center gap-1.5 rounded-lg border border-slate-700/80 bg-slate-900/80 px-2 sm:px-2.5 py-1.5 text-xs font-medium text-slate-200 hover:border-slate-600 hover:bg-slate-800 transition-colors"
             >
-
               <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-
-
-
-              <span className="truncate">
-
+              <span className="hidden sm:inline truncate">
                 {dateRangeLabels[selectedRange]}
-
               </span>
-
-
-
-              <ChevronDown className="h-3 w-3 text-slate-400" />
-
+              <span className="sm:hidden font-medium">
+                {selectedRange === 'today' ? 'Today' : selectedRange.toUpperCase()}
+              </span>
+              <ChevronDown className="h-3 w-3 text-slate-400 shrink-0" />
             </button>
 
-
-
             {rangeMenuOpen && (
-
-              <div className="absolute right-0 top-10 z-30 w-44 rounded-xl border border-slate-700 bg-[#0F172A] p-1.5 shadow-2xl">
-
+              <div className="absolute right-0 top-10 z-30 w-44 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-700 bg-[#0F172A] p-1.5 shadow-2xl">
                 {(
-
                   [
-
                     'today',
-
                     '7d',
-
                     '30d',
-
                     '90d',
-
                     'custom',
-
                   ] as DateRangeOption[]
-
                 ).map((range) => (
-
                   <button
-
                     key={range}
-
                     onClick={() => {
-
                       onRangeChange?.(range);
-
                       setRangeMenuOpen(false);
-
                     }}
-
                     className={cn(
-
                       'flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-xs transition-colors',
-
                       range === selectedRange
-
                         ? 'bg-indigo-600 text-white font-medium'
-
                         : 'text-slate-300 hover:bg-slate-800',
-
                     )}
-
                   >
-
                     <span>{dateRangeLabels[range]}</span>
-
-
-
                     {range === selectedRange && (
-
-                      <Check className="h-3 w-3" />
-
+                      <Check className="h-3 w-3 shrink-0 ml-1" />
                     )}
-
                   </button>
-
                 ))}
-
               </div>
-
             )}
-
           </div>
 
 
@@ -764,8 +711,7 @@ export function DashboardHeader({
 
 
             {profileMenuOpen && (
-
-              <div className="absolute right-0 top-10 z-30 w-52 rounded-xl border border-slate-700 bg-[#0F172A] p-1.5 shadow-2xl">
+              <div className="absolute right-0 top-10 z-30 w-52 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-700 bg-[#0F172A] p-1.5 shadow-2xl">
 
                 <div className="px-2.5 py-2 border-b border-slate-800">
 

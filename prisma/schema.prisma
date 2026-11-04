@@ -33,6 +33,23 @@ model Organization {
 
   members  OrganizationMember[]
   projects Project[]
+
+  eventQuota Int                 @default(100000)
+  usage      OrganizationUsage[]
+}
+
+model OrganizationUsage {
+  id             String   @id @default(uuid())
+  organizationId String
+  periodStart    DateTime
+  eventCount     Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, periodStart])
+  @@index([periodStart])
 }
 
 model OrganizationMember {
@@ -65,7 +82,8 @@ model Project {
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
-  events AnalyticsEvent[]
+  events          AnalyticsEvent[]
+  idempotencyKeys IngestionIdempotencyKey[]
 
   @@unique([organizationId, slug])
   @@index([organizationId])
@@ -89,4 +107,36 @@ model AnalyticsEvent {
   @@index([projectId, createdAt])
   @@index([projectId, eventName])
   @@index([projectId, userId])
+}
+
+model IngestionIdempotencyKey {
+  id          String   @id @default(uuid())
+  projectId   String
+  key         String
+  payloadHash String
+  response    Json?
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, key])
+  @@index([expiresAt])
+  @@map("ingestion_idempotency_keys")
+}
+
+model IngestionErrorLog {
+  id         String   @id @default(uuid())
+  projectId  String?
+  errorCode  String
+  statusCode Int
+  method     String   @default("POST")
+  endpoint   String   @default("/api/events")
+  apiKeyHash String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([projectId, createdAt])
+  @@index([errorCode, createdAt])
+  @@map("ingestion_error_logs")
 }

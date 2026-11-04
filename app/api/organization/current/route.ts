@@ -1,11 +1,10 @@
-
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 
-export async function GET() {
+export const GET = auth(async function GET(req) {
     try {
-        const session = await auth();
+        const session = req.auth;
 
         if (!session?.user?.id) {
             return NextResponse.json(
@@ -49,4 +48,4 @@ export async function GET() {
             { status: 500 },
         );
     }
-}
+});

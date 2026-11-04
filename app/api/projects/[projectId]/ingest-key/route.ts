@@ -3,21 +3,29 @@ import { prisma } from "@/lib/prisma";
 import { createHash, randomBytes } from "crypto";
 import { NextResponse } from "next/server";
 
-export async function POST(
-  _request: Request,
-  { params }: { params: Promise<{ projectId: string }> }
+export const POST = auth(async function POST(
+  request,
+  context?: { params?: Promise<{ projectId: string }> | { projectId: string } }
 ) {
   try {
-    const session = await auth();
+    const session = request.auth;
 
     if (!session?.user?.id) {
-      return NextResponse.json(
+      return NextResponse.json( 
         { error: "Unauthorized" },
         { status: 401 }
       );
     }
 
-    const { projectId } = await params;
+    const resolvedParams = context?.params ? await context.params : null;
+    const projectId = resolvedParams?.projectId;
+
+    if (!projectId) {
+      return NextResponse.json(
+        { error: "Project ID is required" },
+        { status: 400 }
+      );
+    }
 
     // Verify that the signed-in user belongs to the project's organization
     const project = await prisma.project.findFirst({
@@ -77,4 +85,4 @@ export async function POST(
       { status: 500 }
     );
   }
-}
+});

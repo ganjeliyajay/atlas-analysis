@@ -5,22 +5,18 @@ import {
   Settings,
   Users,
   Bell,
-  Sliders,
   Copy,
   Check,
   Plus,
   Trash2,
-  Shield,
-  Mail,
-  AlertTriangle,
   Globe,
   Save,
 } from 'lucide-react';
-import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
+import { Card, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
-import { TEAM_MEMBERS, WORKSPACES, PROJECTS } from '@/lib/dummy-data';
+import { TEAM_MEMBERS, WORKSPACES, } from '@/lib/dummy-data';
 import { TeamMember } from '@/types/analytics';
 import { cn } from '@/lib/utils';
 
@@ -105,7 +101,7 @@ export default function SettingsPage() {
       )}
 
       {/* Tabs */}
-      <div className="flex items-center gap-1 border-b border-slate-800 pb-px">
+      <div className="flex items-center gap-1 border-b border-slate-800 pb-px overflow-x-auto whitespace-nowrap">
         {[
           { id: 'general', label: 'General', icon: Settings },
           { id: 'team', label: `Team Members (${members.length})`, icon: Users },
@@ -120,7 +116,7 @@ export default function SettingsPage() {
               key={tab.id}
               onClick={() => setActiveTab(tab.id as typeof activeTab)}
               className={cn(
-                'flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors',
+                'flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors shrink-0',
                 isActive
                   ? 'border-indigo-500 text-white'
                   : 'border-transparent text-slate-400 hover:text-slate-200'

@@ -41,35 +41,36 @@ export function SlideOver({
     <div className="fixed inset-0 z-50 overflow-hidden">
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+        className="fixed inset-0 bg-black/70 backdrop-blur-sm transition-opacity"
         onClick={onClose}
       />
 
-      <div className="fixed inset-y-0 right-0 flex pl-10 max-w-full">
+      <div className="fixed inset-y-0 right-0 flex pl-0 sm:pl-10 max-w-full">
         <div
           className={cn(
-            'w-screen border-l border-slate-800 bg-[#0B0F19] p-6 shadow-2xl flex flex-col',
+            'w-screen border-l border-slate-800 bg-[#0B0F19] p-4 sm:p-6 shadow-2xl flex flex-col',
             width
           )}
         >
           {/* Header */}
-          <div className="flex items-start justify-between pb-4 border-b border-slate-800">
-            <div>
-              <h2 className="text-lg font-semibold text-white">{title}</h2>
+          <div className="flex items-start justify-between pb-3 sm:pb-4 border-b border-slate-800 shrink-0">
+            <div className="pr-2">
+              <h2 className="text-base sm:text-lg font-semibold text-white">{title}</h2>
               {subtitle && (
-                <p className="mt-1 text-xs text-slate-400 font-mono">{subtitle}</p>
+                <p className="mt-1 text-xs text-slate-400 font-mono truncate max-w-xs sm:max-w-md">{subtitle}</p>
               )}
             </div>
             <button
               onClick={onClose}
-              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition-colors"
+              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition-colors shrink-0"
+              aria-label="Close panel"
             >
               <X className="h-5 w-5" />
             </button>
           </div>
 
           {/* Body */}
-          <div className="flex-1 overflow-y-auto py-5 pr-1">{children}</div>
+          <div className="flex-1 overflow-y-auto py-4 sm:py-5 pr-1">{children}</div>
         </div>
       </div>
     </div>

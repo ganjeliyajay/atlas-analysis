@@ -1,6 +1,6 @@
 import React from 'react';
 import Link from 'next/link';
-import { ShieldCheck, ArrowLeft, Activity, Bell, Server } from 'lucide-react';
+import { ShieldCheck, ArrowLeft, Server } from 'lucide-react';
 
 export default function OpsLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -14,16 +14,20 @@ export default function OpsLayout({ children }: { children: React.ReactNode }) {
           >
             <ArrowLeft className="h-4 w-4" />
             <span className="hidden sm:inline">Exit to Customer Dashboard</span>
+            <span className="sm:hidden">Exit</span>
           </Link>
 
           <span className="text-slate-700">|</span>
 
           <div className="flex items-center gap-2">
-            <div className="flex h-6 w-6 items-center justify-center rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+            <div className="flex h-6 w-6 items-center justify-center rounded bg-amber-500/20 text-amber-400 border border-amber-500/30 shrink-0">
               <ShieldCheck className="h-4 w-4" />
             </div>
-            <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
+            <span className="hidden sm:inline text-xs font-bold uppercase tracking-wider text-amber-400">
               ATLAS PLATFORM OPERATIONS CONSOLE
+            </span>
+            <span className="sm:hidden text-xs font-bold uppercase tracking-wider text-amber-400">
+              Ops Console
             </span>
             <span className="hidden md:inline-flex rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/20">
               INTERNAL ROOT ACCESS

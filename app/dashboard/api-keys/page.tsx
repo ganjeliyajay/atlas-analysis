@@ -2,7 +2,6 @@
 
 import React, { useState } from 'react';
 import {
-  Key,
   Plus,
   Copy,
   Check,
@@ -10,9 +9,8 @@ import {
   Trash2,
   AlertTriangle,
   Eye,
-  Info,
-} from 'lucide-react';
-import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
+  } from 'lucide-react';
+import { Card, } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
@@ -85,7 +83,7 @@ export default function ApiKeysPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-white">API Keys & Ingestion Tokens</h1>
+          <h1 className="text-xl font-bold tracking-tight text-white">API Keys &amp; Ingestion Tokens</h1>
           <p className="mt-1 text-xs text-slate-400">
             Provision and govern client-side publishable keys and secure server-side ingestion tokens.
           </p>
@@ -108,7 +106,7 @@ export default function ApiKeysPage() {
       <div className="flex items-start gap-3 rounded-xl border border-indigo-500/20 bg-indigo-950/20 p-4 text-xs">
         <Shield className="h-5 w-5 text-indigo-400 shrink-0 mt-0.5" />
         <div>
-          <span className="font-semibold text-white">Security & Scoping Best Practice:</span>
+          <span className="font-semibold text-white">Security &amp; Scoping Best Practice:</span>
           <p className="mt-0.5 text-slate-300 leading-relaxed">
             Use <code className="text-indigo-300 font-mono">ingest_only</code> keys for browser SDKs and frontends. Keep <code className="text-indigo-300 font-mono">read_write</code> keys restricted to protected backend environments.
           </p>
@@ -121,12 +119,12 @@ export default function ApiKeysPage() {
           <table className="w-full text-left text-xs">
             <thead className="border-b border-slate-800 bg-slate-900/60 text-slate-400">
               <tr>
-                <th className="py-3 px-4 font-semibold">Key Name</th>
+                <th className="py-3 px-4 font-semibold">Name</th>
                 <th className="py-3 px-4 font-semibold">Token Prefix</th>
                 <th className="py-3 px-4 font-semibold">Project</th>
-                <th className="py-3 px-4 font-semibold">Permissions</th>
-                <th className="py-3 px-4 font-semibold">Created</th>
-                <th className="py-3 px-4 font-semibold">Last Ingested</th>
+                <th className="hidden sm:table-cell py-3 px-4 font-semibold">Permissions</th>
+                <th className="hidden lg:table-cell py-3 px-4 font-semibold">Created</th>
+                <th className="hidden md:table-cell py-3 px-4 font-semibold">Last Ingested</th>
                 <th className="py-3 px-4 font-semibold text-center">Status</th>
                 <th className="py-3 px-4 font-semibold text-right">Actions</th>
               </tr>
@@ -164,7 +162,7 @@ export default function ApiKeysPage() {
                       </div>
                     </td>
                     <td className="py-3 px-4 font-sans text-slate-300">{k.project}</td>
-                    <td className="py-3 px-4 font-sans">
+                    <td className="hidden sm:table-cell py-3 px-4 font-sans">
                       <Badge
                         variant={k.permissions === 'read_write' ? 'warning' : 'neutral'}
                         className="text-[10px] py-0 px-1.5"
@@ -172,8 +170,8 @@ export default function ApiKeysPage() {
                         {k.permissions === 'read_write' ? 'Read + Write' : 'Ingest Only'}
                       </Badge>
                     </td>
-                    <td className="py-3 px-4 text-slate-400 text-[11px]">{k.createdAt}</td>
-                    <td className="py-3 px-4 text-slate-300 font-sans text-[11px]">
+                    <td className="hidden lg:table-cell py-3 px-4 text-slate-400 text-[11px]">{k.createdAt}</td>
+                    <td className="hidden md:table-cell py-3 px-4 text-slate-300 font-sans text-[11px]">
                       {k.lastUsed}
                     </td>
                     <td className="py-3 px-4 text-center font-sans">
@@ -208,7 +206,7 @@ export default function ApiKeysPage() {
                               setRevokeModalOpen(true);
                             }}
                             className="h-7 px-2 text-slate-400 hover:text-amber-400"
-                            title="Revoke Key"
+                            title="Revoke "
                           >
                             <AlertTriangle className="h-3.5 w-3.5" />
                           </Button>
@@ -222,7 +220,7 @@ export default function ApiKeysPage() {
                             setDeleteModalOpen(true);
                           }}
                           className="h-7 px-2 text-slate-400 hover:text-rose-400"
-                          title="Delete Key"
+                          title="Delete "
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
@@ -236,11 +234,11 @@ export default function ApiKeysPage() {
         </div>
       </Card>
 
-      {/* Generate API Key Modal */}
+      {/* Generate API Modal */}
       <Modal
         isOpen={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
-        title={newlyCreatedSecret ? 'API Key Generated' : 'Generate New API Key'}
+        title={newlyCreatedSecret ? 'API Generated' : 'Generate New API '}
         description={
           newlyCreatedSecret
             ? 'Copy your secret token now. It will not be shown again.'
@@ -278,7 +276,7 @@ export default function ApiKeysPage() {
           <form onSubmit={handleCreateKey} className="space-y-4">
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">
-                Key Label / Name *
+                Label / Name *
               </label>
               <input
                 type="text"
@@ -352,8 +350,7 @@ export default function ApiKeysPage() {
                 Cancel
               </Button>
               <Button type="submit" size="sm">
-                Generate Key
-              </Button>
+                Generate </Button>
             </div>
           </form>
         )}
@@ -364,7 +361,7 @@ export default function ApiKeysPage() {
         <Modal
           isOpen={revokeModalOpen}
           onClose={() => setRevokeModalOpen(false)}
-          title="Revoke API Key"
+          title="Revoke API "
           description={`Are you sure you want to revoke "${activeKey.name}"?`}
         >
           <div className="space-y-4">
@@ -380,8 +377,7 @@ export default function ApiKeysPage() {
                 Cancel
               </Button>
               <Button variant="danger" size="sm" onClick={handleRevokeKey}>
-                Revoke Key
-              </Button>
+                Revoke </Button>
             </div>
           </div>
         </Modal>
@@ -392,7 +388,7 @@ export default function ApiKeysPage() {
         <Modal
           isOpen={deleteModalOpen}
           onClose={() => setDeleteModalOpen(false)}
-          title="Delete API Key"
+          title="Delete API "
           description={`Delete record for "${activeKey.name}"`}
         >
           <div className="space-y-4">
@@ -420,8 +416,8 @@ export default function ApiKeysPage() {
         <Modal
           isOpen={detailModalOpen}
           onClose={() => setDetailModalOpen(false)}
-          title={`API Key Details: ${activeKey.name}`}
-          description={`Key ID: ${activeKey.id}`}
+          title={`API Details: ${activeKey.name}`}
+          description={`ID: ${activeKey.id}`}
         >
           <div className="space-y-3 text-xs">
             <div className="grid grid-cols-2 gap-3">

@@ -2,7 +2,6 @@
 
 import React, { useState } from 'react';
 import {
-  Download,
   Copy,
   Check,
   Terminal,
@@ -10,22 +9,16 @@ import {
   Send,
   CheckCircle2,
   Sparkles,
-  ArrowRight,
-  Shield,
-  Layers,
-  ExternalLink,
-} from 'lucide-react';
-import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
-import { Badge } from '@/components/ui/Badge';
+  } from 'lucide-react';
+import { Card, CardTitle, } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { PROJECTS, INITIAL_API_KEYS } from '@/lib/dummy-data';
+import { INITIAL_API_KEYS } from '@/lib/dummy-data';
 import { cn } from '@/lib/utils';
 
 export default function InstallationPage() {
   const [selectedPlatform, setSelectedPlatform] = useState<
     'nextjs' | 'react' | 'javascript' | 'nodejs' | 'rest'
   >('nextjs');
-  const [selectedProject, setSelectedProject] = useState(PROJECTS[0].id);
   const [copiedSnippet, setCopiedSnippet] = useState(false);
   const [activeStep, setActiveStep] = useState(4); // Default to Step 4: Add Tracking Code
 
@@ -167,7 +160,7 @@ curl -X POST https://ingest.atlasanalytics.io/api/v1/events \\
 
       {/* Interactive Step-by-Step Wizard Bar */}
       <Card className="p-4">
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3">
           {stepsList.map((step) => {
             const isCompleted = step.num < activeStep;
             const isCurrent = step.num === activeStep;
@@ -308,8 +301,7 @@ curl -X POST https://ingest.atlasanalytics.io/api/v1/events \\
             </pre>
           </Card>
         </div>
-
-        {/* Right Col: Interactive Test Event Simulator & Verification */}
+ 
         <div className="space-y-5">
           <Card className="p-5">
             <div className="flex items-center gap-2 pb-3 border-b border-slate-800">

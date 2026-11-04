@@ -1,5 +1,4 @@
-
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { randomBytes, createHash } from "crypto";
@@ -34,9 +33,9 @@ async function getUserOrganization(userId: string) {
 // GET: Fetch projects for current organization
 // ============================================
 
-export async function GET() {
+export const GET = auth(async function GET(request) {
   try {
-    const session = await auth();
+    const session = request.auth;
 
     if (!session?.user?.id) {
       return NextResponse.json(
@@ -88,10 +87,6 @@ export async function GET() {
     return NextResponse.json({
       projects: formattedProjects,
     });
-
-    return NextResponse.json({
-      projects: formattedProjects,
-    });
   } catch (error) {
     console.error("GET projects error:", error);
 
@@ -100,15 +95,15 @@ export async function GET() {
       { status: 500 }
     );
   }
-}
+});
 
 // ============================================
 // POST: Create a new project
 // ============================================
 
-export async function POST(request: NextRequest) {
+export const POST = auth(async function POST(request) {
   try {
-    const session = await auth();
+    const session = request.auth;
 
     if (!session?.user?.id) {
       return NextResponse.json(
@@ -236,15 +231,16 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+});
 
 // ============================================
 // PATCH: Update an existing project
 // ============================================
 
-export async function PATCH(request: NextRequest) {
+// PATCH - Update project or regenerate API key
+export const PATCH = auth(async function PATCH(request) {
   try {
-    const session = await auth();
+    const session = request.auth;
 
     if (!session?.user?.id) {
       return NextResponse.json(
@@ -253,23 +249,16 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const membership = await getUserOrganization(
-      session.user.id
-    );
-
-    if (!membership) {
-      return NextResponse.json(
-        { error: "Organization not found" },
-        { status: 404 }
-      );
-    }
-
     const body = await request.json();
 
-    const projectId =
-      typeof body.projectId === "string"
-        ? body.projectId
-        : "";
+    const {
+      projectId,
+      name,
+      websiteUrl,
+      platform,
+      description,
+      regenerateApiKey,
+    } = body;
 
     if (!projectId) {
       return NextResponse.json(
@@ -278,13 +267,27 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const existingProject =
-      await prisma.project.findFirst({
-        where: {
-          id: projectId,
-          organizationId: membership.organizationId,
-        },
-      });
+    // Check user membership
+    const membership = await prisma.organizationMember.findFirst({
+      where: {
+        userId: session.user.id,
+      },
+    });
+
+    if (!membership) {
+      return NextResponse.json(
+        { error: "Organization membership not found" },
+        { status: 403 }
+      );
+    }
+
+    // Verify project belongs to user's organization
+    const existingProject = await prisma.project.findFirst({
+      where: {
+        id: projectId,
+        organizationId: membership.organizationId,
+      },
+    });
 
     if (!existingProject) {
       return NextResponse.json(
@@ -293,67 +296,67 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const name =
-      typeof body.name === "string"
-        ? body.name.trim()
-        : existingProject.name;
+    // Generate a new API key only when requested
+    const newApiKey = regenerateApiKey
+      ? `atl_live_${randomBytes(32).toString("hex")}`
+      : null;
 
-    const websiteUrl =
-      typeof body.websiteUrl === "string"
-        ? body.websiteUrl.trim()
-        : existingProject.websiteUrl;
-
-    const platform =
-      typeof body.platform === "string"
-        ? body.platform
-        : existingProject.platform;
-
-    const description =
-      typeof body.description === "string"
-        ? body.description.trim()
-        : existingProject.description;
-
-    if (!name) {
-      return NextResponse.json(
-        { error: "Project name is required" },
-        { status: 400 }
-      );
-    }
-
-    const updatedProject =
-      await prisma.project.update({
-        where: {
-          id: existingProject.id,
-        },
-        data: {
+    const updatedProject = await prisma.project.update({
+      where: {
+        id: existingProject.id,
+      },
+      data: {
+        ...(name !== undefined && {
           name,
           slug: createSlug(name),
+        }),
+        ...(websiteUrl !== undefined && {
           websiteUrl: websiteUrl || null,
-          platform,
-          description,
-        },
-      });
+        }),
+        ...(platform !== undefined && { platform }),
+        ...(description !== undefined && {
+          description: description || null,
+        }),
+
+        ...(newApiKey && {
+          apiKeyHash: hashApiKey(newApiKey),
+          apiKeyPrefix: newApiKey.slice(0, 16),
+        }),
+      },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        websiteUrl: true,
+        platform: true,
+        description: true,
+        environment: true,
+        apiKeyPrefix: true,
+        createdAt: true,
+      },
+    });
 
     return NextResponse.json({
       project: updatedProject,
+      ...(newApiKey && { apiKey: newApiKey }),
     });
   } catch (error) {
-    console.error("PATCH project error:", error);
+    console.error("Update project error:", error);
 
     return NextResponse.json(
       { error: "Failed to update project" },
       { status: 500 }
     );
   }
-}
+});
 
 // ============================================
 // DELETE: Delete a project
 // ============================================
 
-export async function DELETE(request: NextRequest) {
+export const DELETE = auth(async function DELETE(request) {
   try {
-    const session = await auth();
+    const session = request.auth;
 
     if (!session?.user?.id) {
       return NextResponse.json(
@@ -373,8 +376,8 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    const projectId =
-      request.nextUrl.searchParams.get("projectId");
+    const { searchParams } = new URL(request.url);
+    const projectId = searchParams.get("projectId");
 
     if (!projectId) {
       return NextResponse.json(
@@ -416,4 +419,4 @@ export async function DELETE(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

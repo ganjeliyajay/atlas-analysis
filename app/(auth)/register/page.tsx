@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Activity, User, Mail, Lock, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Activity, User, Mail, Lock, ArrowRight, } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { signIn } from "next-auth/react";
 

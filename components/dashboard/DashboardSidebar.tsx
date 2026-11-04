@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { signOut } from 'next-auth/react';
 import {
   BarChart3,
   Activity,
@@ -38,6 +39,38 @@ export function DashboardSidebar({ mobileOpen, onMobileClose }: DashboardSidebar
   const [collapsed, setCollapsed] = useState(false);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [currentWorkspace, setCurrentWorkspace] = useState(WORKSPACES[0]);
+
+  const [profileName, setProfileName] = useState('User');
+  const [profileEmail, setProfileEmail] = useState('');
+
+  useEffect(() => {
+    let isMounted = true;
+    async function loadUser() {
+      try {
+        const response = await fetch('/api/auth/session');
+        if (response.ok) {
+          const data = await response.json();
+          if (isMounted && data.user) {
+            setProfileName(data.user.name || 'User');
+            setProfileEmail(data.user.email || '');
+          }
+        }
+      } catch (err) {
+        console.error('Sidebar session fetch error:', err);
+      }
+    }
+    loadUser();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const initials = profileName
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('') || 'U';
 
   const navItems = [
     { label: 'Overview', href: '/dashboard', icon: BarChart3 },
@@ -258,23 +291,24 @@ export function DashboardSidebar({ mobileOpen, onMobileClose }: DashboardSidebar
         <div className="flex items-center justify-between rounded-lg bg-slate-900/60 p-2 border border-slate-800/70">
           <div className="flex items-center gap-2.5 overflow-hidden">
             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-tr from-indigo-600 to-indigo-400 text-xs font-bold text-white shadow">
-              JV
+              {initials}
             </div>
             {!collapsed && (
               <div className="truncate">
-                <div className="text-xs font-semibold text-slate-200 truncate">Jay Vora</div>
-                <div className="text-[10px] text-slate-400 truncate">jay@atlasanalytics.io</div>
+                <div className="text-xs font-semibold text-slate-200 truncate">{profileName}</div>
+                <div className="text-[10px] text-slate-400 truncate">{profileEmail || 'Atlas User'}</div>
               </div>
             )}
           </div>
           {!collapsed && (
-            <Link
-              href="/login"
+            <button
+              type="button"
+              onClick={() => signOut({ callbackUrl: '/login' })}
               title="Logout"
               className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors"
             >
               <LogOut className="h-4 w-4" />
-            </Link>
+            </button>
           )}
         </div>
 

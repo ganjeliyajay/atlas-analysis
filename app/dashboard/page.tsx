@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   TrendingUp,
   TrendingDown,
@@ -48,6 +49,10 @@ type DashboardData = {
     date: string;
     eventVolume: number;
   }[];
+  activeUsersOverTime: {
+    date: string;
+    activeUsers: number;
+  }[];
   recentEvents: {
     id: string;
     name: string;
@@ -90,12 +95,28 @@ function formatChange(change: number | null) {
 }
 
 export default function OverviewPage() {
+  const searchParams = useSearchParams();
+  const projectId = searchParams.get('projectId');
+
   const [range, setRange] = useState<DateRangeOption>('30d');
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
+  const [appliedCustomStartDate, setAppliedCustomStartDate] = useState('');
+  const [appliedCustomEndDate, setAppliedCustomEndDate] = useState('');
+  const [customDateError, setCustomDateError] = useState('');
   const [activeChartMetric, setActiveChartMetric] =
     useState<ChartMetric>('eventVolume');
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Filter input states
+  const [eventNameFilter, setEventNameFilter] = useState('');
+  const [userIdFilter, setUserIdFilter] = useState('');
+
+  // Applied filter states
+  const [appliedEventName, setAppliedEventName] = useState('');
+  const [appliedUserId, setAppliedUserId] = useState('');
 
   useEffect(() => {
     const controller = new AbortController();
@@ -105,7 +126,29 @@ export default function OverviewPage() {
       setError(null);
 
       try {
-        const response = await fetch(`/api/dashboard?range=${range}`, {
+        const hasCustomRange = Boolean(appliedCustomStartDate && appliedCustomEndDate);
+        const params = new URLSearchParams({
+          range: hasCustomRange ? 'custom' : range,
+        });
+
+        if (hasCustomRange) {
+          params.set('startDate', appliedCustomStartDate);
+          params.set('endDate', appliedCustomEndDate);
+        }
+
+        if (projectId && projectId !== 'All') {
+          params.set('projectId', projectId);
+        }
+
+        if (appliedEventName) {
+          params.set('eventName', appliedEventName);
+        }
+
+        if (appliedUserId) {
+          params.set('userId', appliedUserId);
+        }
+
+        const response = await fetch(`/api/dashboard?${params.toString()}`, {
           method: 'GET',
           cache: 'no-store',
           signal: controller.signal,
@@ -133,7 +176,7 @@ export default function OverviewPage() {
     void fetchDashboard();
 
     return () => controller.abort();
-  }, [range]);
+  }, [range, projectId, appliedEventName, appliedUserId, appliedCustomStartDate, appliedCustomEndDate]);
 
   const totalEvents = dashboardData?.kpis.totalEvents ?? 0;
   const activeUsers = dashboardData?.kpis.activeUsers ?? 0;
@@ -204,19 +247,26 @@ export default function OverviewPage() {
   ];
 
   const chartData =
-    dashboardData?.eventsOverTime.map((point) => ({
-      date: point.date,
-      label: new Date(`${point.date}T00:00:00`).toLocaleDateString('en-IN', {
-        day: 'numeric',
-        month: 'short',
-      }),
-      value:
-        activeChartMetric === 'eventVolume'
-          ? point.eventVolume
-          : 0,
-    })) ?? [];
+    dashboardData?.eventsOverTime.map((point) => {
+      const activeUsersPoint = dashboardData.activeUsersOverTime.find(
+        (userPoint) => userPoint.date === point.date,
+      );
 
-  const unsupportedMetric = activeChartMetric !== 'eventVolume';
+      return {
+        date: point.date,
+        label: new Date(`${point.date}T00:00:00`).toLocaleDateString('en-IN', {
+          day: 'numeric',
+          month: 'short',
+        }),
+        value:
+          activeChartMetric === 'activeUsers'
+            ? activeUsersPoint?.activeUsers ?? 0
+            : point.eventVolume,
+      };
+    }) ?? [];
+
+  const unsupportedMetric =
+    activeChartMetric === 'sessions' || activeChartMetric === 'pageViews';
 
   return (
     <div className="space-y-6">
@@ -275,26 +325,169 @@ export default function OverviewPage() {
         </h2>
 
         <div className="flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900/80 p-1">
-          {(['today', '7d', '30d', '90d'] as DateRangeOption[]).map((option) => (
-            <button
-              key={option}
-              type="button"
-              onClick={() => setRange(option)}
-              className={cn(
-                'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
-                range === option
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200',
-              )}
-            >
-              {option === 'today' ? 'Today' : option.toUpperCase()}
-            </button>
-          ))}
+          {(['today', '7d', '30d', '90d'] as DateRangeOption[]).map(
+            (option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => {
+                  setAppliedCustomStartDate('');
+                  setAppliedCustomEndDate('');
+                  setCustomDateError('');
+                  setRange(option);
+                }}
+                className={cn(
+                  'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                  range === option
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200',
+                )}
+              >
+                {option === 'today' ? 'Today' : option.toUpperCase()}
+              </button>
+            ),
+          )}
         </div>
       </div>
 
+      {/* Custom date range */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div className="mb-3">
+          <h3 className="text-sm font-semibold text-slate-100">Custom Date Range</h3>
+          <p className="mt-1 text-xs text-slate-400">Choose a start and end date to view analytics for a specific period.</p>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+          <div>
+            <label htmlFor="customStartDate" className="mb-1.5 block text-xs font-medium text-slate-400">Start Date</label>
+            <input id="customStartDate" type="date" value={customStartDate} max={customEndDate || undefined}
+              onChange={(e) => { setCustomStartDate(e.target.value); setCustomDateError(''); }}
+              className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-indigo-500" />
+          </div>
+          <div>
+            <label htmlFor="customEndDate" className="mb-1.5 block text-xs font-medium text-slate-400">End Date</label>
+            <input id="customEndDate" type="date" value={customEndDate} min={customStartDate || undefined}
+              onChange={(e) => { setCustomEndDate(e.target.value); setCustomDateError(''); }}
+              className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 outline-none focus:border-indigo-500" />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => {
+              if (!customStartDate || !customEndDate) {
+                setCustomDateError('Please select both a start date and an end date.');
+                return;
+              }
+              if (customStartDate > customEndDate) {
+                setCustomDateError('Start date must be on or before the end date.');
+                return;
+              }
+              setCustomDateError('');
+              setAppliedCustomStartDate(customStartDate);
+              setAppliedCustomEndDate(customEndDate);
+            }}>Apply Range</Button>
+            <Button variant="secondary" onClick={() => {
+              setCustomStartDate('');
+              setCustomEndDate('');
+              setAppliedCustomStartDate('');
+              setAppliedCustomEndDate('');
+              setCustomDateError('');
+              setRange('30d');
+            }}>Clear</Button>
+          </div>
+        </div>
+        {customDateError && <p role="alert" className="mt-2 text-xs text-rose-400">{customDateError}</p>}
+        {appliedCustomStartDate && appliedCustomEndDate && (
+          <p className="mt-3 text-xs text-indigo-300">Active range: {appliedCustomStartDate} – {appliedCustomEndDate}</p>
+        )}
+      </div>
+
+      {/* Dashboard filters */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div className="mb-4">
+          <h3 className="text-sm font-semibold text-slate-100">
+            Dashboard Filters
+          </h3>
+          <p className="mt-1 text-xs text-slate-400">
+            Filter analytics by event name or user ID.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label
+              htmlFor="eventNameFilter"
+              className="mb-2 block text-xs font-medium text-slate-400"
+            >
+              Event Name
+            </label>
+            <input
+              id="eventNameFilter"
+              type="text"
+              value={eventNameFilter}
+              onChange={(e) => setEventNameFilter(e.target.value)}
+              placeholder="e.g. button_clicked"
+              className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-indigo-500"
+            />
+          </div>
+
+          <div>
+            <label
+              htmlFor="userIdFilter"
+              className="mb-2 block text-xs font-medium text-slate-400"
+            >
+              User ID
+            </label>
+            <input
+              id="userIdFilter"
+              type="text"
+              value={userIdFilter}
+              onChange={(e) => setUserIdFilter(e.target.value)}
+              placeholder="Enter user ID"
+              className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-indigo-500"
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button
+            onClick={() => {
+              setAppliedEventName(eventNameFilter.trim());
+              setAppliedUserId(userIdFilter.trim());
+            }}
+          >
+            Apply Filters
+          </Button>
+
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setEventNameFilter('');
+              setUserIdFilter('');
+              setAppliedEventName('');
+              setAppliedUserId('');
+            }}
+          >
+            Clear Filters
+          </Button>
+        </div>
+
+        {(appliedEventName || appliedUserId) && (
+          <div className="mt-3 text-xs text-slate-400">
+            Active filters:
+            {appliedEventName && (
+              <span className="ml-2 text-indigo-300">
+                Event: {appliedEventName}
+              </span>
+            )}
+            {appliedUserId && (
+              <span className="ml-2 text-indigo-300">
+                User: {appliedUserId}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* KPI cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 sm:gap-4">
         {kpis.map((kpi, index) => {
           const Icon = kpiIcons[index % kpiIcons.length];
           const isUp = kpi.trend === 'up';
@@ -371,7 +564,9 @@ export default function OverviewPage() {
             </CardTitle>
             <CardDescription>
               Telemetry aggregated over{' '}
-              {range === 'today' ? 'the past 24 hours' : `the last ${range}`}.
+              {appliedCustomStartDate && appliedCustomEndDate
+                ? `${appliedCustomStartDate} to ${appliedCustomEndDate}`
+                : range === 'today' ? 'the past 24 hours' : `the last ${range}`}.
             </CardDescription>
           </div>
 
@@ -560,6 +755,7 @@ export default function OverviewPage() {
                     </td>
                   </tr>
                 ))}
+
                 {!isLoading &&
                   (dashboardData?.recentEvents.length ?? 0) === 0 && (
                     <tr>

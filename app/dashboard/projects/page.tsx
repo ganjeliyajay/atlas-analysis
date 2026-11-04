@@ -7,13 +7,8 @@ import {
   ExternalLink,
   Edit2,
   Trash2,
-  Layers,
-  Activity,
-  CheckCircle,
-  Clock,
-  Sparkles,
 } from 'lucide-react';
-import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
+import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
@@ -35,6 +30,65 @@ export default function ProjectsPage() {
   const [websiteUrl, setWebsiteUrl] = useState('');
   const [platform, setPlatform] = useState<Project['platform']>('Next.js');
   const [description, setDescription] = useState('');
+
+  const [reloadTrigger, setReloadTrigger] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function fetchProjects() {
+      try {
+        const response = await fetch('/api/projects', {
+          signal: controller.signal,
+          cache: 'no-store',
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to fetch projects');
+        }
+
+        type ApiProjectRecord = {
+          id: string;
+          name: string;
+          slug: string;
+          websiteUrl: string | null;
+          platform: Project['platform'];
+          description: string | null;
+          environment: string;
+          createdAt: string;
+          eventCount: number;
+          apiKeyPrefix: string | null;
+        };
+
+        const formattedProjects: Project[] = (data.projects ?? []).map(
+          (project: ApiProjectRecord) => ({
+            ...project,
+            status: 'active',
+            createdAt: new Date(project.createdAt)
+              .toISOString()
+              .split('T')[0],
+            lastActivity:
+              project.eventCount > 0 ? 'Recently' : 'No events yet',
+          })
+        );
+
+        setProjectsList(formattedProjects);
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') return;
+        console.error('Fetch projects error:', err);
+        setError(
+          err instanceof Error ? err.message : 'Failed to fetch projects'
+        );
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    void fetchProjects();
+
+    return () => controller.abort();
+  }, [reloadTrigger]);
 
   const openCreateModal = () => {
     setProjectName('');
@@ -71,7 +125,7 @@ export default function ProjectsPage() {
       }
 
       // Refresh projects from database
-      await fetchProjects();
+      setLoading(true); setReloadTrigger((r) => r + 1);
 
       setCreateModalOpen(false);
       setProjectName('');
@@ -124,7 +178,7 @@ export default function ProjectsPage() {
         throw new Error(data.error || 'Failed to update project');
       }
 
-      await fetchProjects();
+      setLoading(true); setReloadTrigger((r) => r + 1);
 
       setEditModalOpen(false);
     } catch (err) {
@@ -157,7 +211,7 @@ export default function ProjectsPage() {
         throw new Error(data.error || 'Failed to delete project');
       }
 
-      await fetchProjects();
+      setLoading(true); setReloadTrigger((r) => r + 1);
 
       setDeleteModalOpen(false);
       setActiveProject(null);
@@ -166,46 +220,6 @@ export default function ProjectsPage() {
       alert(
         err instanceof Error ? err.message : 'Failed to delete project'
       );
-    }
-  };
-
-  useEffect(() => {
-    fetchProjects();
-  }, []);
-
-  const fetchProjects = async () => {
-    try {
-      setLoading(true);
-      setError('');
-
-      const response = await fetch('/api/projects');
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to fetch projects');
-      }
-
-      const formattedProjects: Project[] = data.projects.map(
-        (project: any) => ({
-          ...project,
-          status: 'active',
-          createdAt: new Date(project.createdAt)
-            .toISOString()
-            .split('T')[0],
-          lastActivity:
-            project.eventCount > 0 ? 'Recently' : 'No events yet',
-        })
-      );
-
-      setProjectsList(formattedProjects);
-    } catch (err) {
-      console.error('Fetch projects error:', err);
-      setError(
-        err instanceof Error ? err.message : 'Failed to fetch projects'
-      );
-    } finally {
-      setLoading(false);
     }
   };
 
