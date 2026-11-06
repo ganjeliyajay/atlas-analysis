@@ -22,7 +22,7 @@ import { cn } from '@/lib/utils';
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<'general' | 'team' | 'project' | 'notifications'>('general');
-  const [workspaceName, setWorkspaceName] = useState(WORKSPACES[0].name);
+  const [workspaceName, setWorkspaceName] = useState(WORKSPACES[0]?.name ?? 'Atlas Workspace');
   const [timezone, setTimezone] = useState('America/New_York (EST)');
   const [dateFormat, setDateFormat] = useState('YYYY-MM-DD');
   const [copiedWsId, setCopiedWsId] = useState(false);
@@ -41,7 +41,7 @@ export default function SettingsPage() {
   const [slackWebhook, setSlackWebhook] = useState('https://hooks.slack.com/services/T00/B00/XXXX');
 
   const copyWorkspaceId = () => {
-    navigator.clipboard.writeText(WORKSPACES[0].id);
+    navigator.clipboard.writeText(WORKSPACES[0]?.id ?? 'default');
     setCopiedWsId(true);
     setTimeout(() => setCopiedWsId(false), 2000);
   };
@@ -58,7 +58,7 @@ export default function SettingsPage() {
 
     const newMember: TeamMember = {
       id: `tm_${Date.now()}`,
-      name: inviteEmail.split('@')[0],
+      name: inviteEmail.split('@')[0] ?? 'Member',
       email: inviteEmail,
       role: inviteRole,
       status: 'Pending',
@@ -156,7 +156,7 @@ export default function SettingsPage() {
                   <input
                     type="text"
                     disabled
-                    value={WORKSPACES[0].id}
+                    value={WORKSPACES[0]?.id ?? 'default'}
                     className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs font-mono text-slate-400"
                   />
                   <Button

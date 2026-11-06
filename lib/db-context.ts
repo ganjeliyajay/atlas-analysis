@@ -8,6 +8,10 @@ export async function withUserContext<T>(
   userId: string,
   callback: (tx: Transaction) => Promise<T>,
 ): Promise<T> {
+  if (!userId.trim()) {
+    throw new Error("User context is required");
+  }
+
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`
       SELECT set_config('app.user_id', ${userId}, true)
@@ -22,6 +26,10 @@ export async function withTenantContext<T>(
   organizationId: string,
   callback: (tx: Transaction) => Promise<T>,
 ): Promise<T> {
+  if (!userId.trim() || !organizationId.trim()) {
+    throw new Error("User and organization context are required");
+  }
+
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`
       SELECT set_config('app.user_id', ${userId}, true)
@@ -49,19 +57,14 @@ export async function withTenantContext<T>(
   });
 }
 
-/**
- * Context for public event ingestion.
- *
- * Authentication is performed through the project's API key
- * before calling this helper.
- *
- * This helper establishes tenant context without requiring
- * a signed-in dashboard user.
- */
 export async function withIngestionTenantContext<T>(
   organizationId: string,
   callback: (tx: Transaction) => Promise<T>,
 ): Promise<T> {
+  if (!organizationId.trim()) {
+    throw new Error("Ingestion tenant context is required");
+  }
+
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`
       SELECT set_config('app.tenant_id', ${organizationId}, true)

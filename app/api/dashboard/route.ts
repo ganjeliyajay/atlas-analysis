@@ -14,7 +14,10 @@ function isValidDate(value: string | null): value is string {
     return false;
   }
 
-  const [year, month, day] = value.split("-").map(Number);
+  const parts = value.split("-").map(Number);
+  const year = parts[0] ?? 0;
+  const month = parts[1] ?? 1;
+  const day = parts[2] ?? 1;
   const date = new Date(year, month - 1, day);
 
   return (
@@ -25,7 +28,10 @@ function isValidDate(value: string | null): value is string {
 }
 
 function parseDateOnly(value: string): Date {
-  const [year, month, day] = value.split("-").map(Number);
+  const parts = value.split("-").map(Number);
+  const year = parts[0] ?? 0;
+  const month = parts[1] ?? 1;
+  const day = parts[2] ?? 1;
   return new Date(year, month - 1, day, 0, 0, 0, 0);
 }
 

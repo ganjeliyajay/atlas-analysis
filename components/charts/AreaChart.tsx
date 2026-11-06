@@ -82,6 +82,7 @@ export function AreaChart({
     if (i === 0) return `M ${pt.x} ${pt.y}`;
 
     const prev = points[i - 1];
+    if (!prev) return acc;
     const cpX = (prev.x + pt.x) / 2;
 
     return `${acc} C ${cpX} ${prev.y}, ${cpX} ${pt.y}, ${pt.x} ${pt.y}`;
@@ -91,8 +92,9 @@ export function AreaChart({
   const firstPoint = points[0];
 
   const areaD =
-    `${pathD} L ${lastPoint.x} ${paddingTop + chartHeight}` +
-    ` L ${firstPoint.x} ${paddingTop + chartHeight} Z`;
+    firstPoint && lastPoint
+      ? `${pathD} L ${lastPoint.x} ${paddingTop + chartHeight} L ${firstPoint.x} ${paddingTop + chartHeight} Z`
+      : '';
 
   const gridTicks = [0, 0.33, 0.66, 1];
 

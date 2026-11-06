@@ -17,12 +17,6 @@ type EventRecord = {
   createdAt: Date;
 };
 
-const RANGE_DAYS: Record<Period, number> = {
-  daily: 1,
-  weekly: 7,
-  monthly: 30,
-};
-
 function getUtcDay(date: Date) {
   return new Date(
     Date.UTC(

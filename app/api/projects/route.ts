@@ -3,10 +3,11 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import {
   withTenantContext,
-  withUserContext,
 } from "@/lib/db-context";
-import { randomBytes, createHash } from "crypto";
-
+import { getCurrentOrganization } from "@/lib/organization";
+import { requireOrgPermission } from "@/lib/permissions";
+import { generateApiKey } from "@/lib/api-keys";
+import { z } from "zod";
 function createSlug(name: string) {
   return name
     .toLowerCase()
@@ -15,24 +16,31 @@ function createSlug(name: string) {
     .replace(/^-|-$/g, "");
 }
 
-function hashApiKey(apiKey: string) {
-  return createHash("sha256").update(apiKey).digest("hex");
-}
+const createProjectSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  websiteUrl: z.union([z.string().trim().url(), z.literal("")]).optional(),
+  platform: z.string().trim().min(1).max(50).default("Next.js"),
+  description: z.string().trim().max(1000).nullable().optional(),
+  environment: z.enum(["development", "staging", "production"]).default("production"),
+});
 
-async function getUserOrganization(userId: string) {
-  return withUserContext(userId, (tx) =>
-    tx.organizationMember.findFirst({
-      where: {
-        userId,
-      },
-      orderBy: {
-        createdAt: "asc",
-      },
-      include: {
-        organization: true,
-      },
-    })
-  );
+const updateProjectSchema = z.object({
+  projectId: z.string().trim().min(1),
+  name: z.string().trim().min(1).max(100).optional(),
+  websiteUrl: z.union([z.string().trim().url(), z.literal("")]).nullable().optional(),
+  platform: z.string().trim().min(1).max(50).optional(),
+  description: z.string().trim().max(1000).nullable().optional(),
+  regenerateApiKey: z.boolean().optional(),
+});
+
+
+async function getUserOrganization() {
+  const currentOrg = await getCurrentOrganization();
+  if (!currentOrg) return null;
+  return {
+    organizationId: currentOrg.id,
+    organization: currentOrg,
+  };
 }
 
 // ============================================
@@ -52,7 +60,7 @@ export const GET = auth(async function GET(request) {
 
     const userId = session.user.id;
 
-    const membership = await getUserOrganization(userId);
+    const membership = await getUserOrganization();
 
     if (!membership) {
       return NextResponse.json(
@@ -125,7 +133,7 @@ export const POST = auth(async function POST(request) {
 
     const userId = session.user.id;
 
-    const membership = await getUserOrganization(userId);
+    const membership = await getUserOrganization();
 
     if (!membership) {
       return NextResponse.json(
@@ -134,39 +142,37 @@ export const POST = auth(async function POST(request) {
       );
     }
 
-    const body = await request.json();
+    const permission = await requireOrgPermission(
+      userId,
+      membership.organizationId,
+      "project:create",
+    );
+    if (!permission.allowed) {
+      return NextResponse.json({ error: permission.error }, { status: 403 });
+    }
 
-    const name =
-      typeof body.name === "string"
-        ? body.name.trim()
-        : "";
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON request body" }, { status: 400 });
+    }
 
-    const websiteUrl =
-      typeof body.websiteUrl === "string"
-        ? body.websiteUrl.trim()
-        : "";
-
-    const platform =
-      typeof body.platform === "string"
-        ? body.platform
-        : "Next.js";
-
-    const description =
-      typeof body.description === "string"
-        ? body.description.trim()
-        : null;
-
-    const environment =
-      typeof body.environment === "string"
-        ? body.environment
-        : "production";
-
-    if (!name) {
+    const validation = createProjectSchema.safeParse(body);
+    if (!validation.success) {
       return NextResponse.json(
-        { error: "Project name is required" },
-        { status: 400 }
+        { error: validation.error.issues[0]?.message ?? "Invalid project input" },
+        { status: 400 },
       );
     }
+
+    const {
+      name,
+      websiteUrl = "",
+      platform,
+      description = null,
+      environment,
+    } = validation.data;
 
     const slug = createSlug(name);
 
@@ -177,18 +183,14 @@ export const POST = auth(async function POST(request) {
       );
     }
 
-    // Generate a raw API key.
-    // Store only its hash in the database.
-    const apiKey = `atl_live_${randomBytes(32).toString("hex")}`;
+    // Issue a dedicated, one-time API key. Only its salted scrypt hash is stored.
+    const generatedKey = generateApiKey();
 
-    const apiKeyHash = hashApiKey(apiKey);
-    const apiKeyPrefix = apiKey.slice(0, 16);
-
-    const project = await withTenantContext(
+    const result = await withTenantContext(
       userId,
       membership.organizationId,
-      (tx) =>
-        tx.project.create({
+      async (tx) => {
+        const project = await tx.project.create({
           data: {
             name,
             slug,
@@ -196,12 +198,28 @@ export const POST = auth(async function POST(request) {
             platform,
             description,
             environment,
-            apiKeyHash,
-            apiKeyPrefix,
+            apiKeyPrefix: generatedKey.keyPrefix,
+            apiKeyHash: null,
             organizationId: membership.organizationId,
           },
-        })
+        });
+
+        await tx.apiKey.create({
+          data: {
+            organizationId: membership.organizationId,
+            projectId: project.id,
+            name: `${name} API key`,
+            keyPrefix: generatedKey.keyPrefix,
+            keyHash: generatedKey.keyHash,
+            createdById: userId,
+          },
+        });
+
+        return project;
+      },
     );
+
+    const project = result;
 
     return NextResponse.json(
       {
@@ -219,7 +237,7 @@ export const POST = auth(async function POST(request) {
         },
 
         // Raw API key is returned only once at creation.
-        apiKey,
+        apiKey: generatedKey.rawKey,
       },
       { status: 201 }
     );
@@ -264,7 +282,20 @@ export const PATCH = auth(async function PATCH(request) {
     }
 
     const userId = session.user.id;
-    const body = await request.json();
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON request body" }, { status: 400 });
+    }
+
+    const validation = updateProjectSchema.safeParse(body);
+    if (!validation.success) {
+      return NextResponse.json(
+        { error: validation.error.issues[0]?.message ?? "Invalid project input" },
+        { status: 400 },
+      );
+    }
 
     const {
       projectId,
@@ -273,19 +304,9 @@ export const PATCH = auth(async function PATCH(request) {
       platform,
       description,
       regenerateApiKey,
-    } = body;
+    } = validation.data;
 
-    if (
-      typeof projectId !== "string" ||
-      !projectId.trim()
-    ) {
-      return NextResponse.json(
-        { error: "Project ID is required" },
-        { status: 400 }
-      );
-    }
-
-    const membership = await getUserOrganization(userId);
+    const membership = await getUserOrganization();
 
     if (!membership) {
       return NextResponse.json(
@@ -294,10 +315,20 @@ export const PATCH = auth(async function PATCH(request) {
       );
     }
 
-    // Generate a new API key only when requested.
-    const newApiKey = regenerateApiKey
-      ? `atl_live_${randomBytes(32).toString("hex")}`
-      : null;
+    const permission = await requireOrgPermission(
+      userId,
+      membership.organizationId,
+      "project:update",
+    );
+    if (!permission.allowed) {
+      return NextResponse.json({ error: permission.error }, { status: 403 });
+    }
+
+    if (name !== undefined && !createSlug(name)) {
+      return NextResponse.json({ error: "Project name must contain letters or numbers" }, { status: 400 });
+    }
+
+    const generatedKey = regenerateApiKey ? generateApiKey() : null;
 
     const result = await withTenantContext(
       userId,
@@ -334,9 +365,9 @@ export const PATCH = auth(async function PATCH(request) {
             ...(description !== undefined && {
               description: description || null,
             }),
-            ...(newApiKey && {
-              apiKeyHash: hashApiKey(newApiKey),
-              apiKeyPrefix: newApiKey.slice(0, 16),
+            ...(generatedKey && {
+              apiKeyHash: null,
+              apiKeyPrefix: generatedKey.keyPrefix,
             }),
           },
           select: {
@@ -351,6 +382,30 @@ export const PATCH = auth(async function PATCH(request) {
             createdAt: true,
           },
         });
+
+        if (generatedKey) {
+          await tx.apiKey.updateMany({
+            where: {
+              projectId: existingProject.id,
+              organizationId: membership.organizationId,
+              revokedAt: null,
+            },
+            data: {
+              revokedAt: new Date(),
+            },
+          });
+
+          await tx.apiKey.create({
+            data: {
+              organizationId: membership.organizationId,
+              projectId: existingProject.id,
+              name: `${updatedProject.name} API key`,
+              keyPrefix: generatedKey.keyPrefix,
+              keyHash: generatedKey.keyHash,
+              createdById: userId,
+            },
+          });
+        }
 
         return {
           notFound: false as const,
@@ -368,7 +423,7 @@ export const PATCH = auth(async function PATCH(request) {
 
     return NextResponse.json({
       project: result.project,
-      ...(newApiKey && { apiKey: newApiKey }),
+      ...(generatedKey && { apiKey: generatedKey.rawKey }),
     });
   } catch (error) {
     console.error("Update project error:", error);
@@ -411,7 +466,7 @@ export const DELETE = auth(async function DELETE(request) {
 
     const userId = session.user.id;
 
-    const membership = await getUserOrganization(userId);
+    const membership = await getUserOrganization();
 
     if (!membership) {
       return NextResponse.json(
@@ -420,15 +475,28 @@ export const DELETE = auth(async function DELETE(request) {
       );
     }
 
-    const { searchParams } = new URL(request.url);
-    const projectId = searchParams.get("projectId");
+    const permission = await requireOrgPermission(
+      userId,
+      membership.organizationId,
+      "project:delete",
+    );
+    if (!permission.allowed) {
+      return NextResponse.json({ error: permission.error }, { status: 403 });
+    }
 
-    if (!projectId) {
+    const { searchParams } = new URL(request.url);
+    const projectIdValidation = z.string().trim().min(1).safeParse(
+      searchParams.get("projectId"),
+    );
+
+    if (!projectIdValidation.success) {
       return NextResponse.json(
         { error: "Project ID is required" },
         { status: 400 }
       );
     }
+
+    const projectId = projectIdValidation.data;
 
     const deleted = await withTenantContext(
       userId,
