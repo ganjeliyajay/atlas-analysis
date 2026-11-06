@@ -489,7 +489,7 @@ export default function OverviewPage() {
       {/* KPI cards */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 sm:gap-4">
         {kpis.map((kpi, index) => {
-          const Icon = kpiIcons[index % kpiIcons.length];
+          const Icon = kpiIcons[index % kpiIcons.length] ?? Activity;
           const isUp = kpi.trend === 'up';
           const isDown = kpi.trend === 'down';
 

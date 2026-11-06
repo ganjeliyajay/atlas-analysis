@@ -1,53 +1,56 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { Prisma } from "@/lib/generated/prisma/client";
 import {
   withTenantContext,
   withUserContext,
 } from "@/lib/db-context";
 
+const ACTIVE_WINDOW_DAYS = 30;
+
+function jsonError(message: string, status: number) {
+  return NextResponse.json({ error: message }, { status });
+}
+
 export const GET = auth(async function GET(request) {
   try {
-    const authUserId = request.auth?.user?.id;
+    const userId = request.auth?.user?.id;
 
-    if (!authUserId) {
-      return NextResponse.json(
-        { error: "Unauthorized" },
-        { status: 401 },
-      );
+    if (!userId) {
+      return jsonError("Unauthorized", 401);
     }
 
-    const membership = await withUserContext(
-      authUserId,
-      async (tx) => {
-        return tx.organizationMember.findFirst({
-          where: { userId: authUserId },
-          select: { organizationId: true },
-          orderBy: { createdAt: "asc" },
-        });
-      },
+    // Resolve the user's organization.
+    const membership = await withUserContext(userId, (tx) =>
+      tx.organizationMember.findFirst({
+        where: { userId },
+        select: { organizationId: true },
+        orderBy: { createdAt: "asc" },
+      }),
     );
 
     if (!membership) {
-      return NextResponse.json(
-        { error: "Organization not found" },
-        { status: 404 },
-      );
+      return jsonError("Organization not found", 404);
     }
 
     const { searchParams } = new URL(request.url);
-    const projectId = searchParams.get("projectId");
+    const rawProjectId = searchParams.get("projectId");
+    const projectId = rawProjectId?.trim() || null;
+
+    if (projectId && projectId.length > 200) {
+      return jsonError("Invalid projectId", 400);
+    }
 
     const now = new Date();
     const startDate = new Date(now);
-    startDate.setDate(startDate.getDate() - 30);
-
-    const activeThreshold = startDate;
+    startDate.setDate(startDate.getDate() - ACTIVE_WINDOW_DAYS);
 
     return await withTenantContext(
-      authUserId,
+      userId,
       membership.organizationId,
       async (tx) => {
+        // Verify that the requested project belongs to this organization.
         if (projectId && projectId !== "All") {
           const project = await tx.project.findFirst({
             where: {
@@ -58,277 +61,316 @@ export const GET = auth(async function GET(request) {
           });
 
           if (!project) {
-            return NextResponse.json(
-              { error: "Project not found or access denied" },
-              { status: 404 },
+            return jsonError(
+              "Project not found or access denied",
+              404,
             );
           }
         }
 
-        const projectFilter = {
-          project: {
-            organizationId: membership.organizationId,
-          },
-          ...(projectId && projectId !== "All"
-            ? { projectId }
-            : {}),
+        // Parameterized optional project filter.
+        const projectFilter =
+          projectId && projectId !== "All"
+            ? Prisma.sql`AND e."projectId" = ${projectId}`
+            : Prisma.empty;
+
+        const allTimeProjectFilter =
+          projectId && projectId !== "All"
+            ? Prisma.sql`AND e."projectId" = ${projectId}`
+            : Prisma.empty;
+
+        type QueryResult = {
+          data: {
+            users: Array<{
+              id: string;
+              name: string;
+              email: string;
+              country: string;
+              device: string;
+              firstSeen: string;
+              lastSeen: string;
+              totalEvents: number;
+              sessionsCount: number;
+              status: "active" | "inactive";
+              topPages: Array<{
+                url: string;
+                visits: number;
+              }>;
+              timeline: Array<{
+                id: string;
+                action: string;
+                timestamp: string;
+              }>;
+              recentEvents: Array<{
+                id: string;
+                name: string;
+                page: string;
+                timestamp: string;
+              }>;
+            }>;
+            dailyUsers: Array<{
+              date: string;
+              count: number;
+            }>;
+            totalUsers: number;
+            newUsers: number;
+            activeUsers: number;
+            totalSessions: number;
+            returningUsers: number;
+          };
         };
 
-        // Fetch identified events from the last 30 days.
-        const events = await tx.analyticsEvent.findMany({
-          where: {
-            ...projectFilter,
-            createdAt: {
-              gte: startDate,
-              lte: now,
-            },
-            userId: {
-              not: null,
-            },
-          },
-          select: {
-            id: true,
-            userId: true,
-            sessionId: true,
-            eventName: true,
-            pageUrl: true,
-            device: true,
-            country: true,
-            createdAt: true,
-          },
-          orderBy: {
-            createdAt: "asc",
-          },
-        });
-
-        // Find each identified user's first-ever event.
-        const allTimeUserFirstSeen =
-          await tx.analyticsEvent.groupBy({
-            by: ["userId"],
-            where: {
-              ...projectFilter,
-              userId: {
-                not: null,
-              },
-            },
-            _min: {
-              createdAt: true,
-            },
-          });
-
-        const firstSeenMap = new Map<string, Date>();
-
-        for (const user of allTimeUserFirstSeen) {
-          if (user.userId && user._min.createdAt) {
-            firstSeenMap.set(
-              user.userId,
-              user._min.createdAt,
-            );
-          }
-        }
-
-        const userMap = new Map<
-          string,
-          {
-            id: string;
-            totalEvents: number;
-            sessions: Set<string>;
-            firstSeen: Date;
-            lastSeen: Date;
-            country: string;
-            device: string;
-            topPages: Map<string, number>;
-            recentEvents: typeof events;
-          }
-        >();
-
-        for (const event of events) {
-          if (!event.userId) continue;
-
-          if (!userMap.has(event.userId)) {
-            userMap.set(event.userId, {
-              id: event.userId,
-              totalEvents: 0,
-              sessions: new Set(),
-              firstSeen:
-                firstSeenMap.get(event.userId) ??
-                event.createdAt,
-              lastSeen: event.createdAt,
-              country: event.country || "Unknown",
-              device: event.device || "Unknown",
-              topPages: new Map(),
-              recentEvents: [],
-            });
-          }
-
-          const user = userMap.get(event.userId)!;
-
-          user.totalEvents += 1;
-
-          if (event.sessionId) {
-            user.sessions.add(event.sessionId);
-          }
-
-          const historicalFirstSeen =
-            firstSeenMap.get(event.userId);
-
-          if (
-            historicalFirstSeen &&
-            historicalFirstSeen < user.firstSeen
-          ) {
-            user.firstSeen = historicalFirstSeen;
-          }
-
-          if (event.createdAt > user.lastSeen) {
-            user.lastSeen = event.createdAt;
-          }
-
-          if (event.country) {
-            user.country = event.country;
-          }
-
-          if (event.device) {
-            user.device = event.device;
-          }
-
-          if (event.pageUrl) {
-            user.topPages.set(
-              event.pageUrl,
-              (user.topPages.get(event.pageUrl) || 0) + 1,
-            );
-          }
-
-          user.recentEvents.push(event);
-        }
-
-        const users = Array.from(userMap.values()).map((user) => {
-          const topPages = Array.from(user.topPages.entries())
-            .map(([url, visits]) => ({
-              url,
-              visits,
-            }))
-            .sort((a, b) => b.visits - a.visits)
-            .slice(0, 5);
-
-          const recentEvents = user.recentEvents
-            .slice(-5)
-            .reverse()
-            .map((event) => ({
-              id: event.id,
-              name: event.eventName,
-              page: event.pageUrl || "—",
-              timestamp: event.createdAt.toISOString(),
-            }));
-
-          const status =
-            user.lastSeen >= activeThreshold
-              ? "active"
-              : "inactive";
-
-          return {
-            id: user.id,
-            // AnalyticsEvent has no name/email fields.
-            name: user.id,
-            email: user.id,
-            country: user.country,
-            device: user.device,
-            firstSeen: user.firstSeen.toISOString(),
-            lastSeen: user.lastSeen.toISOString(),
-            totalEvents: user.totalEvents,
-            sessionsCount: user.sessions.size,
-            status,
-            topPages,
-            timeline: [
-              {
-                id: `${user.id}-first`,
-                action: "First seen",
-                timestamp: user.firstSeen.toISOString(),
-              },
-              {
-                id: `${user.id}-last`,
-                action: "Last activity",
-                timestamp: user.lastSeen.toISOString(),
-              },
-            ],
-            recentEvents,
-          };
-        });
-
-        // KPI calculations.
-        const totalUsers = firstSeenMap.size;
-
-        // New users: first-ever activity within the last 30 days.
-        const newUsers = Array.from(firstSeenMap.values()).filter(
-          (firstSeen) => firstSeen >= startDate,
-        ).length;
-
-        // Active users: activity within the last 30 days.
-        const activeUsers = users.filter(
-          (user) => new Date(user.lastSeen) >= activeThreshold,
-        ).length;
-
-        // Returning users: active in the last 30 days,
-        // but first seen before the last 30 days.
-        const returningUsers = users.filter((user) => {
-          const firstSeen = new Date(user.firstSeen);
-
-          return (
-            new Date(user.lastSeen) >= activeThreshold &&
-            firstSeen < startDate
-          );
-        }).length;
-
-        // Unique sessions in the last 30 days.
-        const totalSessions = new Set(
-          events
-            .map((event) => event.sessionId)
-            .filter(
-              (sessionId): sessionId is string =>
-                Boolean(sessionId),
+        const result = await tx.$queryRaw<QueryResult[]>(
+          Prisma.sql`
+            WITH all_time_users AS (
+              SELECT
+                e."userId",
+                MIN(e."createdAt") AS first_seen
+              FROM "AnalyticsEvent" e
+              WHERE
+                e."userId" IS NOT NULL
+                ${allTimeProjectFilter}
+              GROUP BY e."userId"
             ),
-        ).size;
 
-        // Daily unique active users.
-        const dailyMap = new Map<string, Set<string>>();
+            recent_events AS (
+              SELECT
+                e."id",
+                e."userId",
+                e."sessionId",
+                e."eventName",
+                e."pageUrl",
+                e."country",
+                e."device",
+                e."createdAt"
+              FROM "AnalyticsEvent" e
+              WHERE
+                e."userId" IS NOT NULL
+                AND e."createdAt" >= ${startDate}
+                AND e."createdAt" <= ${now}
+                ${projectFilter}
+            ),
 
-        for (const event of events) {
-          if (!event.userId) continue;
+            user_stats AS (
+              SELECT
+                "userId",
+                COUNT(*)::int AS total_events,
+                COUNT(DISTINCT "sessionId")::int AS sessions_count,
+                MAX("createdAt") AS last_seen,
+                (
+                  ARRAY_AGG(
+                    "country"
+                    ORDER BY "createdAt" DESC
+                  ) FILTER (WHERE "country" IS NOT NULL)
+                )[1] AS country,
+                (
+                  ARRAY_AGG(
+                    "device"
+                    ORDER BY "createdAt" DESC
+                  ) FILTER (WHERE "device" IS NOT NULL)
+                )[1] AS device
+              FROM recent_events
+              GROUP BY "userId"
+            ),
 
-          const dateKey = event.createdAt
-            .toISOString()
-            .slice(0, 10);
+            ranked_pages AS (
+              SELECT
+                "userId",
+                "pageUrl",
+                COUNT(*)::int AS visits,
+                ROW_NUMBER() OVER (
+                  PARTITION BY "userId"
+                  ORDER BY COUNT(*) DESC, "pageUrl" ASC
+                ) AS page_rank
+              FROM recent_events
+              WHERE "pageUrl" IS NOT NULL
+              GROUP BY "userId", "pageUrl"
+            ),
 
-          if (!dailyMap.has(dateKey)) {
-            dailyMap.set(dateKey, new Set());
-          }
+            top_pages AS (
+              SELECT
+                "userId",
+                JSONB_AGG(
+                  JSONB_BUILD_OBJECT(
+                    'url', "pageUrl",
+                    'visits', visits
+                  )
+                  ORDER BY page_rank
+                ) AS pages
+              FROM ranked_pages
+              WHERE page_rank <= 5
+              GROUP BY "userId"
+            ),
 
-          dailyMap.get(dateKey)!.add(event.userId);
-        }
+            ranked_recent_events AS (
+              SELECT
+                "id",
+                "userId",
+                "eventName",
+                "pageUrl",
+                "createdAt",
+                ROW_NUMBER() OVER (
+                  PARTITION BY "userId"
+                  ORDER BY "createdAt" DESC, "id" DESC
+                ) AS event_rank
+              FROM recent_events
+            ),
 
-        const dailyUsers = [];
+            latest_events AS (
+              SELECT
+                "userId",
+                JSONB_AGG(
+                  JSONB_BUILD_OBJECT(
+                    'id', "id",
+                    'name', "eventName",
+                    'page', COALESCE("pageUrl", '—'),
+                    'timestamp', "createdAt"
+                  )
+                  ORDER BY "createdAt" DESC
+                ) AS events
+              FROM ranked_recent_events
+              WHERE event_rank <= 5
+              GROUP BY "userId"
+            ),
 
-        for (let i = 29; i >= 0; i--) {
-          const date = new Date(now);
-          date.setDate(date.getDate() - i);
+            daily_counts AS (
+              SELECT
+                DATE("createdAt" AT TIME ZONE 'UTC') AS activity_date,
+                COUNT(DISTINCT "userId")::int AS user_count
+              FROM recent_events
+              GROUP BY DATE("createdAt" AT TIME ZONE 'UTC')
+            ),
 
-          const dateKey = date.toISOString().slice(0, 10);
+            daily_series AS (
+              SELECT
+                generate_series(
+                  DATE_TRUNC('day', ${now}::timestamp) - INTERVAL '29 days',
+                  DATE_TRUNC('day', ${now}::timestamp),
+                  INTERVAL '1 day'
+                )::date AS activity_date
+            ),
 
-          dailyUsers.push({
-            date: dateKey,
-            count: dailyMap.get(dateKey)?.size || 0,
-          });
+            formatted_users AS (
+              SELECT
+                s."userId" AS id,
+                s.total_events,
+                s.sessions_count,
+                s.last_seen,
+                COALESCE(s.country, 'Unknown') AS country,
+                COALESCE(s.device, 'Unknown') AS device,
+                a.first_seen,
+                COALESCE(p.pages, '[]'::jsonb) AS top_pages,
+                COALESCE(l.events, '[]'::jsonb) AS recent_events
+              FROM user_stats s
+              INNER JOIN all_time_users a
+                ON a."userId" = s."userId"
+              LEFT JOIN top_pages p
+                ON p."userId" = s."userId"
+              LEFT JOIN latest_events l
+                ON l."userId" = s."userId"
+            )
+
+            SELECT JSONB_BUILD_OBJECT(
+              'users',
+              COALESCE(
+                (
+                  SELECT JSONB_AGG(
+                    JSONB_BUILD_OBJECT(
+                      'id', u.id,
+                      'name', 'Visitor ' || LEFT(u.id, 8),
+                      'email', u.id,
+                      'country', u.country,
+                      'device', u.device,
+                      'firstSeen', u.first_seen,
+                      'lastSeen', u.last_seen,
+                      'totalEvents', u.total_events,
+                      'sessionsCount', u.sessions_count,
+                      'status', 'active',
+                      'topPages', u.top_pages,
+                      'timeline', JSONB_BUILD_ARRAY(
+                        JSONB_BUILD_OBJECT(
+                          'id', u.id || '-first',
+                          'action', 'First seen',
+                          'timestamp', u.first_seen
+                        ),
+                        JSONB_BUILD_OBJECT(
+                          'id', u.id || '-last',
+                          'action', 'Last activity',
+                          'timestamp', u.last_seen
+                        )
+                      ),
+                      'recentEvents', u.recent_events
+                    )
+                    ORDER BY u.last_seen DESC
+                  )
+                  FROM formatted_users u
+                ),
+                '[]'::jsonb
+              ),
+
+              'dailyUsers',
+              COALESCE(
+                (
+                  SELECT JSONB_AGG(
+                    JSONB_BUILD_OBJECT(
+                      'date', TO_CHAR(d.activity_date, 'YYYY-MM-DD'),
+                      'count', COALESCE(c.user_count, 0)
+                    )
+                    ORDER BY d.activity_date
+                  )
+                  FROM daily_series d
+                  LEFT JOIN daily_counts c
+                    ON c.activity_date = d.activity_date
+                ),
+                '[]'::jsonb
+              ),
+
+              'totalUsers',
+              (
+                SELECT COUNT(*)::int
+                FROM all_time_users
+              ),
+
+              'newUsers',
+              (
+                SELECT COUNT(*)::int
+                FROM all_time_users
+                WHERE first_seen >= ${startDate}
+              ),
+
+              'activeUsers',
+              (
+                SELECT COUNT(*)::int
+                FROM user_stats
+              ),
+
+              'returningUsers',
+              (
+                SELECT COUNT(*)::int
+                FROM formatted_users
+                WHERE first_seen < ${startDate}
+              ),
+
+              'totalSessions',
+              (
+                SELECT COUNT(DISTINCT "sessionId")::int
+                FROM recent_events
+                WHERE "sessionId" IS NOT NULL
+              )
+            ) AS data
+          `,
+        );
+
+        const data = result[0]?.data;
+
+        if (!data) {
+          throw new Error("Users analytics query returned no data");
         }
 
         return NextResponse.json({
           success: true,
           data: {
-            users,
-            dailyUsers,
-            totalUsers,
-            newUsers,
-            returningUsers,
-            activeUsers,
-            totalSessions,
+            ...data,
             range: "30d",
           },
         });

@@ -198,10 +198,7 @@ export const GET = auth(async function GET(request) {
       mappedEvents.map((event) => event.id),
     );
 
-    let lastSeenDate =
-      events.length > 0
-        ? events[0].createdAt
-        : new Date();
+    let lastSeenDate = events[0]?.createdAt ?? new Date();
 
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {

@@ -28,7 +28,7 @@ export default function InstallationPage() {
   >('idle');
   const [testResponsePayload, setTestResponsePayload] = useState<string | null>(null);
 
-  const activeApiKey = INITIAL_API_KEYS[0].keyPrefix + '_demo_token';
+  const activeApiKey = (INITIAL_API_KEYS[0]?.keyPrefix ?? 'atlas_live_sample') + '_demo_token';
 
   const snippets = {
     nextjs: `// app/layout.tsx

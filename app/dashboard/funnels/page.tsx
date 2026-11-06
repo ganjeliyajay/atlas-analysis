@@ -180,84 +180,88 @@ function getEventLabel(event: string) {
 }
 
 function normalizeComparisonResult(
-  data: any
+  data: unknown
 ): FunnelComparisonResponse {
-  const rawResults = Array.isArray(data?.results)
-    ? data.results
+  const record = data !== null && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+  const rawResults = Array.isArray(record['results'])
+    ? (record['results'] as unknown[])
     : [];
 
   const results: ComparisonFunnel[] = rawResults.map(
-    (item: any) => {
-      const rawSteps = Array.isArray(item.steps)
-        ? item.steps
-        : Array.isArray(item.funnel)
-          ? item.funnel
-          : Array.isArray(item.data?.funnel)
-            ? item.data.funnel
+    (rawItem: unknown) => {
+      const item = rawItem !== null && typeof rawItem === 'object' ? (rawItem as Record<string, unknown>) : {};
+      const rawSteps: unknown[] = Array.isArray(item['steps'])
+        ? (item['steps'] as unknown[])
+        : Array.isArray(item['funnel'])
+          ? (item['funnel'] as unknown[])
+          : Array.isArray((item['data'] as Record<string, unknown> | undefined)?.['funnel'])
+            ? ((item['data'] as Record<string, unknown>)['funnel'] as unknown[])
             : [];
 
       const steps: ComparisonStep[] = rawSteps.map(
-        (step: any, index: number) => ({
-          eventName:
-            step.eventName ||
-            step.name ||
-            step.value ||
-            `Step ${index + 1}`,
-          users: Number(step.users || 0),
-          conversionFromStart: Number(
-            step.conversionFromStart ??
-              step.overallConversionRate ??
-              0
-          ),
-          conversionFromPrevious: Number(
-            step.conversionFromPrevious ??
-              step.conversionRate ??
-              0
-          ),
-          dropOffFromPrevious: Number(
-            step.dropOffFromPrevious ??
-              step.dropOffRate ??
-              0
-          ),
-        })
+        (rawStep: unknown, index: number) => {
+          const step = rawStep !== null && typeof rawStep === 'object' ? (rawStep as Record<string, unknown>) : {};
+          return {
+            eventName:
+              String(step['eventName'] || step['name'] || step['value'] || `Step ${index + 1}`),
+            users: Number(step['users'] || 0),
+            conversionFromStart: Number(
+              step['conversionFromStart'] ??
+                step['overallConversionRate'] ??
+                0
+            ),
+            conversionFromPrevious: Number(
+              step['conversionFromPrevious'] ??
+                step['conversionRate'] ??
+                0
+            ),
+            dropOffFromPrevious: Number(
+              step['dropOffFromPrevious'] ??
+                step['dropOffRate'] ??
+                0
+            ),
+          };
+        }
       );
 
+      const itemSummary = typeof item['summary'] === 'object' && item['summary'] !== null
+        ? (item['summary'] as Record<string, unknown>)
+        : {};
+
       const totalUsers = Number(
-        item.totalUsers ??
-          item.summary?.totalUsers ??
+        item['totalUsers'] ??
+          itemSummary['totalUsers'] ??
           steps[0]?.users ??
           0
       );
 
       const convertedUsers = Number(
-        item.convertedUsers ??
-          item.summary?.convertedUsers ??
+        item['convertedUsers'] ??
+          itemSummary['convertedUsers'] ??
           steps[steps.length - 1]?.users ??
           0
       );
 
       const lastStepConversion =
-        steps.length > 0
-          ? steps[steps.length - 1].conversionFromStart
-          : 0;
+        steps[steps.length - 1]?.conversionFromStart ?? 0;
 
       const overallConversionRate = Number(
-        item.overallConversionRate ??
-          item.summary?.overallConversionRate ??
+        item['overallConversionRate'] ??
+          itemSummary['overallConversionRate'] ??
           lastStepConversion
       );
 
       const overallDropOffRate = Number(
-        item.overallDropOffRate ??
-          item.summary?.overallDropOffRate ??
+        item['overallDropOffRate'] ??
+          itemSummary['overallDropOffRate'] ??
           (totalUsers > 0
             ? ((totalUsers - convertedUsers) / totalUsers) * 100
             : 0)
       );
 
       return {
-        id: String(item.id || item.name || Math.random()),
-        name: String(item.name || "Unnamed Funnel"),
+        id: String(item['id'] || item['name'] || Math.random()),
+        name: String(item['name'] || "Unnamed Funnel"),
         totalUsers,
         convertedUsers,
         overallConversionRate,
@@ -267,16 +271,19 @@ function normalizeComparisonResult(
     }
   );
 
-  const best = data?.bestPerformingFunnel;
+  const rawBest = record['bestPerformingFunnel'];
+  const best = rawBest !== null && typeof rawBest === 'object'
+    ? (rawBest as Record<string, unknown>)
+    : null;
 
   return {
     results,
     bestPerformingFunnel: best
       ? {
-          id: String(best.id),
-          name: String(best.name),
+          id: String(best['id']),
+          name: String(best['name']),
           overallConversionRate: Number(
-            best.overallConversionRate || 0
+            best['overallConversionRate'] || 0
           ),
         }
       : results.length > 0
@@ -287,7 +294,7 @@ function normalizeComparisonResult(
                 a.overallConversionRate
             )[0];
 
-            return winner.totalUsers > 0
+            return winner && winner.totalUsers > 0
               ? {
                   id: winner.id,
                   name: winner.name,
@@ -392,7 +399,7 @@ export default function FunnelAnalyticsPage() {
         : [];
 
       const lastStepUsers = rawSteps.length
-        ? rawSteps[rawSteps.length - 1].users
+        ? rawSteps[rawSteps.length - 1]?.users ?? 0
         : 0;
 
       const formattedData: NonNullable<
@@ -400,7 +407,7 @@ export default function FunnelAnalyticsPage() {
       > = {
         steps: rawSteps.map((step, index) => {
           const previousStepUsers =
-            index > 0 ? rawSteps[index - 1].users : 0;
+            index > 0 ? rawSteps[index - 1]?.users ?? 0 : 0;
 
           const dropOffUsers =
             index > 0
@@ -429,7 +436,7 @@ export default function FunnelAnalyticsPage() {
           totalUsers: Number(data.totalUsers || 0),
           convertedUsers: lastStepUsers,
           overallConversionRate: rawSteps.length
-            ? rawSteps[rawSteps.length - 1].conversionFromStart
+            ? rawSteps[rawSteps.length - 1]?.conversionFromStart ?? 0
             : 0,
           overallDropOffRate:
             Number(data.totalUsers || 0) > 0

@@ -40,6 +40,12 @@ function createEvent(
   };
 }
 
+function getStep(result: ReturnType<typeof calculateFunnel>, index: number) {
+  const step = result.steps[index];
+  if (!step) throw new Error(`Step at index ${index} does not exist`);
+  return step;
+}
+
 describe("Funnel Analytics", () => {
   it("should calculate 100% conversion when all users complete every step", () => {
     const events = [
@@ -54,9 +60,9 @@ describe("Funnel Analytics", () => {
     expect(result.summary.convertedUsers).toBe(1);
     expect(result.summary.overallConversionRate).toBe(100);
 
-    expect(result.steps[0].users).toBe(1);
-    expect(result.steps[1].users).toBe(1);
-    expect(result.steps[2].users).toBe(1);
+    expect(getStep(result, 0).users).toBe(1);
+    expect(getStep(result, 1).users).toBe(1);
+    expect(getStep(result, 2).users).toBe(1);
   });
 
   it("should calculate drop-off when users do not complete all steps", () => {
@@ -68,9 +74,9 @@ describe("Funnel Analytics", () => {
 
     const result = calculateFunnel(events, steps, 7);
 
-    expect(result.steps[0].users).toBe(2);
-    expect(result.steps[1].users).toBe(1);
-    expect(result.steps[2].users).toBe(0);
+    expect(getStep(result, 0).users).toBe(2);
+    expect(getStep(result, 1).users).toBe(1);
+    expect(getStep(result, 2).users).toBe(0);
 
     expect(result.summary.totalUsers).toBe(2);
     expect(result.summary.convertedUsers).toBe(0);
@@ -103,8 +109,8 @@ describe("Funnel Analytics", () => {
 
     const result = calculateFunnel(events, steps, 1);
 
-    expect(result.steps[0].users).toBe(1);
-    expect(result.steps[1].users).toBe(0);
+    expect(getStep(result, 0).users).toBe(1);
+    expect(getStep(result, 1).users).toBe(0);
   });
 
   it("should return zero values when there are no events", () => {
@@ -144,9 +150,9 @@ describe("Funnel Analytics", () => {
 
     const result = calculateFunnel(events, steps, 7);
 
-    expect(result.steps[0].users).toBe(1);
-    expect(result.steps[1].users).toBe(1);
-    expect(result.steps[2].users).toBe(0);
+    expect(getStep(result, 0).users).toBe(1);
+    expect(getStep(result, 1).users).toBe(1);
+    expect(getStep(result, 2).users).toBe(0);
   });
 
   it("should count multiple users independently", () => {
@@ -163,9 +169,9 @@ describe("Funnel Analytics", () => {
 
     const result = calculateFunnel(events, steps, 7);
 
-    expect(result.steps[0].users).toBe(3);
-    expect(result.steps[1].users).toBe(2);
-    expect(result.steps[2].users).toBe(1);
+    expect(getStep(result, 0).users).toBe(3);
+    expect(getStep(result, 1).users).toBe(2);
+    expect(getStep(result, 2).users).toBe(1);
 
     expect(result.summary.totalUsers).toBe(3);
     expect(result.summary.convertedUsers).toBe(1);
@@ -180,9 +186,9 @@ describe("Funnel Analytics", () => {
 
     const result = calculateFunnel(events, steps, 7);
 
-    expect(result.steps[0].users).toBe(1);
-    expect(result.steps[1].users).toBe(0);
-    expect(result.steps[2].users).toBe(0);
+    expect(getStep(result, 0).users).toBe(1);
+    expect(getStep(result, 1).users).toBe(0);
+    expect(getStep(result, 2).users).toBe(0);
   });
 
   it("should allow users to complete steps exactly at the conversion window boundary", () => {
@@ -199,7 +205,7 @@ describe("Funnel Analytics", () => {
 
     const result = calculateFunnel(events, steps, 7);
 
-    expect(result.steps[0].users).toBe(1);
-    expect(result.steps[1].users).toBe(1);
+    expect(getStep(result, 0).users).toBe(1);
+    expect(getStep(result, 1).users).toBe(1);
   });
 });

@@ -80,7 +80,7 @@ export function calculateFunnel(
 
         firstStepTime = event.createdAt;
 
-        stepCounts[0]++;
+        stepCounts[0] = (stepCounts[0] ?? 0) + 1;
         currentStepIndex = 1;
 
         if (currentStepIndex === steps.length) {
@@ -106,7 +106,7 @@ export function calculateFunnel(
 
       // Match only the expected next funnel step
       if (matchesStep(event, steps[currentStepIndex]!)) {
-        stepCounts[currentStepIndex]++;
+        stepCounts[currentStepIndex] = (stepCounts[currentStepIndex] ?? 0) + 1;
         currentStepIndex++;
 
         if (currentStepIndex === steps.length) {
@@ -143,10 +143,11 @@ export function calculateFunnel(
           ? 0
           : (dropOffUsers / previousUsers) * 100;
 
+      const firstStepUsers = stepCounts[0] ?? 0;
       const overallConversionRate =
-        stepCounts[0] === 0
+        firstStepUsers === 0
           ? 0
-          : (users / stepCounts[0]) * 100;
+          : (users / firstStepUsers) * 100;
 
       return {
         stepNumber: index + 1,

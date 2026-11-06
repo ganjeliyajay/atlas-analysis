@@ -1,7 +1,5 @@
 'use client';
 
-
-
 import React, { useEffect, useMemo, useState } from 'react';
 
 import { useSearchParams } from 'next/navigation';
@@ -29,12 +27,14 @@ import {
   Radio,
 
   Clock3,
+
   ChevronLeft,
+
   ChevronRight,
+
   ExternalLink,
+
 } from 'lucide-react';
-
-
 
 import {
 
@@ -48,19 +48,13 @@ import {
 
 } from '@/components/ui/Card';
 
-
-
 import { Badge } from '@/components/ui/Badge';
 
 import { SlideOver } from '@/components/ui/SlideOver';
 
 import { AreaChart } from '@/components/charts/AreaChart';
 
-
-
 type UserStatus = 'active' | 'inactive' | 'churned';
-
-
 
 type UserProfile = {
 
@@ -116,8 +110,6 @@ type UserProfile = {
 
 };
 
-
-
 type DailyUser = {
 
   date: string;
@@ -125,8 +117,6 @@ type DailyUser = {
   count: number;
 
 };
-
-
 
 type UsersAnalyticsResponse = {
 
@@ -151,8 +141,6 @@ type UsersAnalyticsResponse = {
   };
 
 };
-
-
 
 type LiveActivity = {
 
@@ -179,8 +167,6 @@ type LiveActivity = {
   timestamp: string;
 
 };
-
-
 
 type LiveActivityResponse = {
 
@@ -218,60 +204,99 @@ type LiveActivityResponse = {
 
 };
 
-
-
 type JourneyEvent = {
+
   id: string;
+
   userId: string | null;
+
   sessionId: string | null;
+
   eventName: string;
+
   properties: unknown;
+
   pageUrl: string | null;
+
   country: string;
+
   device: string;
+
   browser: string;
+
   projectId: string;
+
   projectName: string;
+
   timestamp: string;
+
 };
 
 type JourneySession = {
+
   sessionId: string;
+
   eventCount: number;
+
   startedAt: string;
+
   lastActivityAt: string;
+
   uniquePages: number;
+
   pages: string[];
+
 };
 
 type JourneyResponse = {
+
   success: boolean;
+
   data: {
+
     user: {
+
       userId: string;
+
       firstSeen: string | null;
+
       lastSeen: string | null;
+
       totalEvents: number;
+
       totalSessions: number;
+
       totalPagesVisited: number;
+
     };
+
     sessions: JourneySession[];
+
     events: JourneyEvent[];
+
     pagination: {
+
       page: number;
+
       limit: number;
+
       totalEvents: number;
+
       totalPages: number;
+
       hasNextPage: boolean;
+
       hasPreviousPage: boolean;
+
     };
+
     updatedAt: string;
+
   };
+
 };
 
 type SortField = 'name' | 'totalEvents' | 'sessionsCount';
-
-
 
 export default function UsersPage() {
 
@@ -279,15 +304,11 @@ export default function UsersPage() {
 
   const projectId = searchParams.get('projectId');
 
-
-
-  // Existing users analytics state*
+  // Existing users analytics state
 
   const [users, setUsers] = useState<UserProfile[]>([]);
 
   const [dailyUsers, setDailyUsers] = useState<DailyUser[]>([]);
-
-
 
   const [totalUsers, setTotalUsers] = useState(0);
 
@@ -295,234 +316,161 @@ export default function UsersPage() {
 
   const [activeUsers, setActiveUsers] = useState(0);
 
-
-
   const [search, setSearch] = useState('');
 
   const [statusFilter, setStatusFilter] = useState('All');
-
-
 
   const [selectedUser, setSelectedUser] =
 
     useState<UserProfile | null>(null);
 
-
-
   const [sortField, setSortField] =
 
     useState<SortField>('totalEvents');
 
-
-
   const [sortAsc, setSortAsc] = useState(false);
-
-
 
   const [loading, setLoading] = useState(true);
 
   const [error, setError] = useState<string | null>(null);
 
-
-
-  // Live activity state*
+  // Live activity state
 
   const [liveData, setLiveData] =
 
     useState<LiveActivityResponse['data'] | null>(null);
-
-
 
   const [liveLoading, setLiveLoading] = useState(true);
 
   const [liveError, setLiveError] = useState<string | null>(null);
 
   // Real-time user journey state
+
   const [journeyData, setJourneyData] =
+
     useState<JourneyResponse['data'] | null>(null);
+
   const [journeyLoading, setJourneyLoading] = useState(false);
+
   const [journeyError, setJourneyError] = useState<string | null>(null);
+
   const [journeySessionId, setJourneySessionId] = useState('All');
+
   const [journeyPage, setJourneyPage] = useState(1);
 
-
-
-
-  // Fetch existing users analytics data*
-
+  // Fetch users analytics whenever the selected project changes.
   useEffect(() => {
-
-    const controller = new AbortController();
-
-
+    let isMounted = true;
 
     async function fetchUsers() {
-
-      try {
-
-        setLoading(true);
-
-        setError(null);
-
-
-
-        const params = new URLSearchParams();
-
-
-
-        if (projectId && projectId !== 'All') {
-
-          params.set('projectId', projectId);
-
-        }
-
-
-
-        const endpoint = params.toString()
-
-          ? `/api/analytics/users?${params.toString()}`
-
-          : '/api/analytics/users';
-
-
-
-        const response = await fetch(endpoint, {
-
-          method: 'GET',
-
-          cache: 'no-store',
-
-          signal: controller.signal,
-
-        });
-
-
-
-        const result = await response.json();
-
-
-
-        if (!response.ok) {
-
-          throw new Error(
-
-            result.error || 'Failed to fetch users analytics.',
-
-          );
-
-        }
-
-
-
-        const payload = result as UsersAnalyticsResponse;
-
-
-
-        if (!payload.success || !payload.data) {
-
-          throw new Error('Invalid users analytics response.');
-
-        }
-
-
-
-        setUsers(payload.data.users ?? []);
-
-        setDailyUsers(payload.data.dailyUsers ?? []);
-
-
-
-        setTotalUsers(payload.data.totalUsers ?? 0);
-
-        setNewUsers(payload.data.newUsers ?? 0);
-
-        setActiveUsers(payload.data.activeUsers ?? 0);
-
-      } catch (err) {
-
-        if (err instanceof Error && err.name === 'AbortError') {
-
-          return;
-
-        }
-
-
-
-        console.error('Users analytics fetch error:', err);
-
-
-
-        setError(
-
-          err instanceof Error
-
-            ? err.message
-
-            : 'Something went wrong while loading users analytics.',
-
-        );
-
-      } finally {
-
-        if (!controller.signal.aborted) {
-
-          setLoading(false);
-
-        }
-
+      setLoading(true);
+      setError(null);
+
+      const params = new URLSearchParams();
+      if (projectId && projectId !== 'All') {
+        params.set('projectId', projectId);
       }
 
+      const endpoint = params.toString()
+        ? `/api/analytics/users?${params.toString()}`
+        : '/api/analytics/users';
+
+      try {
+        console.info('[Users Analytics] Fetching:', endpoint);
+
+        const response = await fetch(endpoint, {
+          method: 'GET',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: { Accept: 'application/json' },
+        });
+
+        const payload = (await response.json()) as
+          | UsersAnalyticsResponse
+          | { error?: string };
+
+        console.info(
+          '[Users Analytics] Response:',
+          response.status,
+          response.statusText,
+        );
+
+        if (!response.ok) {
+          const message =
+            'error' in payload && payload.error
+              ? payload.error
+              : `Users analytics request failed (${response.status}).`;
+          throw new Error(message);
+        }
+
+        if (
+          !('success' in payload) ||
+          !payload.success ||
+          !payload.data ||
+          !Array.isArray(payload.data.users) ||
+          !Array.isArray(payload.data.dailyUsers)
+        ) {
+          throw new Error('Invalid users analytics response.');
+        }
+
+        if (!isMounted) return;
+
+        setUsers(payload.data.users);
+        setDailyUsers(payload.data.dailyUsers);
+        setTotalUsers(Number(payload.data.totalUsers ?? 0));
+        setNewUsers(Number(payload.data.newUsers ?? 0));
+        setActiveUsers(Number(payload.data.activeUsers ?? 0));
+        setError(null);
+      } catch (err) {
+        if (!isMounted) return;
+
+        console.error('[Users Analytics] Fetch failed:', err);
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Something went wrong while loading users analytics.',
+        );
+        setUsers([]);
+        setDailyUsers([]);
+        setTotalUsers(0);
+        setNewUsers(0);
+        setActiveUsers(0);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
     }
 
+    void fetchUsers();
 
-
-    fetchUsers();
-
-
-
-    return () => controller.abort();
-
+    return () => {
+      // Ignore responses from an old project/page instance.
+      isMounted = false;
+    };
   }, [projectId]);
 
-
-
-  // Fetch live user activity every 5 seconds*
+  // Fetch live user activity every 5 seconds
 
   useEffect(() => {
 
     const controller = new AbortController();
 
-
-
-    let intervalId: ReturnType<typeof setInterval> | undefined;
-
     let isFetching = false;
-
-
 
     async function fetchLiveActivity() {
 
       if (isFetching || controller.signal.aborted) return;
 
-
-
       isFetching = true;
-
-
 
       try {
 
         const params = new URLSearchParams();
-
-
 
         if (projectId && projectId !== 'All') {
 
           params.set('projectId', projectId);
 
         }
-
-
 
         const endpoint = params.toString()
 
@@ -530,8 +478,6 @@ export default function UsersPage() {
 
           : '/api/analytics/users/activity';
 
-
-
         const response = await fetch(endpoint, {
 
           method: 'GET',
@@ -542,13 +488,9 @@ export default function UsersPage() {
 
         });
 
-
-
         const result =
 
           (await response.json()) as LiveActivityResponse;
-
-
 
         if (!response.ok || !result.success || !result.data) {
 
@@ -559,8 +501,6 @@ export default function UsersPage() {
           );
 
         }
-
-
 
         setLiveData(result.data);
 
@@ -573,8 +513,6 @@ export default function UsersPage() {
           return;
 
         }
-
-
 
         setLiveError(
 
@@ -590,8 +528,6 @@ export default function UsersPage() {
 
         isFetching = false;
 
-
-
         if (!controller.signal.aborted) {
 
           setLiveLoading(false);
@@ -602,21 +538,13 @@ export default function UsersPage() {
 
     }
 
-
-
     fetchLiveActivity();
 
-
-
-    intervalId = setInterval(fetchLiveActivity, 5000);
-
-
+    const intervalId = setInterval(fetchLiveActivity, 5000);
 
     return () => {
 
       controller.abort();
-
-
 
       if (intervalId) {
 
@@ -628,66 +556,105 @@ export default function UsersPage() {
 
   }, [projectId]);
 
-
-
   // Fetch and auto-refresh the selected user's complete journey page.
+
   useEffect(() => {
+
     if (!selectedUser?.id) {
-      setJourneyData(null);
-      setJourneyError(null);
-      setJourneyLoading(false);
+
+      void Promise.resolve().then(() => {
+        setJourneyData(null);
+        setJourneyError(null);
+        setJourneyLoading(false);
+      });
+
       return;
+
     }
 
     const controller = new AbortController();
-    let intervalId: ReturnType<typeof setInterval> | undefined;
+
     let isFetching = false;
+
     let firstRequest = true;
 
     async function fetchJourney() {
+
       if (isFetching || controller.signal.aborted) return;
+
       isFetching = true;
+
       if (firstRequest) setJourneyLoading(true);
 
       try {
+
         const params = new URLSearchParams({
+
           userId: selectedUser!.id,
+
           page: String(journeyPage),
+
           limit: '100',
+
         });
+
         if (projectId && projectId !== 'All') params.set('projectId', projectId);
+
         if (journeySessionId !== 'All') params.set('sessionId', journeySessionId);
 
         const response = await fetch(
+
           `/api/analytics/users/journey?${params.toString()}`,
+
           { method: 'GET', cache: 'no-store', signal: controller.signal },
+
         );
+
         const result = (await response.json()) as JourneyResponse & { error?: string };
+
         if (!response.ok || !result.success || !result.data) {
+
           throw new Error(result.error || 'Unable to load user journey.');
+
         }
+
         setJourneyData(result.data);
+
         setJourneyError(null);
+
       } catch (err) {
+
         if (err instanceof Error && err.name === 'AbortError') return;
+
         setJourneyError(err instanceof Error ? err.message : 'User journey unavailable.');
+
       } finally {
+
         firstRequest = false;
+
         isFetching = false;
+
         if (!controller.signal.aborted) setJourneyLoading(false);
+
       }
+
     }
 
     fetchJourney();
-    intervalId = setInterval(fetchJourney, 10000);
+
+    const intervalId = setInterval(fetchJourney, 10000);
 
     return () => {
+
       controller.abort();
+
       if (intervalId) clearInterval(intervalId);
+
     };
+
   }, [selectedUser?.id, projectId, journeySessionId, journeyPage]);
 
-  // Convert daily users into chart data*
+  // Convert daily users into chart data
 
   const userGrowthChart = useMemo(() => {
 
@@ -715,15 +682,11 @@ export default function UsersPage() {
 
   }, [dailyUsers]);
 
-
-
-  // Search, status filter, and sorting*
+  // Search, status filter, and sorting
 
   const filteredUsers = useMemo(() => {
 
     const searchValue = search.toLowerCase().trim();
-
-
 
     return [...users]
 
@@ -737,13 +700,9 @@ export default function UsersPage() {
 
           user.id.toLowerCase().includes(searchValue);
 
-
-
         const matchStatus =
 
           statusFilter === 'All' || user.status === statusFilter;
-
-
 
         return matchSearch && matchStatus;
 
@@ -761,21 +720,15 @@ export default function UsersPage() {
 
         }
 
-
-
         const valueA = a[sortField];
 
         const valueB = b[sortField];
-
-
 
         return sortAsc ? valueA - valueB : valueB - valueA;
 
       });
 
   }, [users, search, statusFilter, sortField, sortAsc]);
-
-
 
   function handleSort(field: SortField) {
 
@@ -793,29 +746,19 @@ export default function UsersPage() {
 
   }
 
-
-
   function formatNumber(value: number) {
 
     return value.toLocaleString('en-IN');
 
   }
 
-
-
   function formatDate(value: string) {
 
     if (!value) return '—';
 
-
-
     const date = new Date(value);
 
-
-
     if (Number.isNaN(date.getTime())) return '—';
-
-
 
     return date.toLocaleDateString('en-IN', {
 
@@ -829,21 +772,13 @@ export default function UsersPage() {
 
   }
 
-
-
   function formatDateTime(value: string) {
 
     if (!value) return '—';
 
-
-
     const date = new Date(value);
 
-
-
     if (Number.isNaN(date.getTime())) return '—';
-
-
 
     return date.toLocaleString('en-IN', {
 
@@ -860,8 +795,6 @@ export default function UsersPage() {
     });
 
   }
-
-
 
   function getInitials(name: string) {
 
@@ -881,8 +814,6 @@ export default function UsersPage() {
 
   }
 
-
-
   return (
 
     <div className="space-y-6">
@@ -897,8 +828,6 @@ export default function UsersPage() {
 
         </h1>
 
-
-
         <p className="mt-1 text-xs text-slate-400">
 
           Inspect identified user profiles, individual user journeys,
@@ -908,8 +837,6 @@ export default function UsersPage() {
         </p>
 
       </div>
-
-
 
       {/* Live User Activity */}
 
@@ -923,21 +850,15 @@ export default function UsersPage() {
 
               <Radio className="h-4 w-4 text-emerald-400" />
 
-
-
               <h2 className="text-base font-semibold text-white">
 
                 Live User Activity
 
               </h2>
 
-
-
               <Badge variant="success">LIVE</Badge>
 
             </div>
-
-
 
             <p className="mt-1 text-xs text-slate-400">
 
@@ -946,8 +867,6 @@ export default function UsersPage() {
             </p>
 
           </div>
-
-
 
           <div className="flex items-center gap-2 text-xs text-slate-400">
 
@@ -961,23 +880,17 @@ export default function UsersPage() {
 
             />
 
-
-
             Auto-refresh every 5 seconds
 
           </div>
 
         </div>
 
-
-
         {liveError && (
 
           <p className="text-xs text-rose-400">{liveError}</p>
 
         )}
-
-
 
         {/* Live KPI Cards */}
 
@@ -1037,8 +950,6 @@ export default function UsersPage() {
 
             const Icon = item.icon;
 
-
-
             return (
 
               <div
@@ -1057,13 +968,9 @@ export default function UsersPage() {
 
                   </span>
 
-
-
                   <Icon className={`h-4 w-4 ${item.color}`} />
 
                 </div>
-
-
 
                 <p className="mt-2 text-2xl font-bold text-white">
 
@@ -1083,8 +990,6 @@ export default function UsersPage() {
 
         </div>
 
-
-
         {/* Recent Activity Feed */}
 
         <div>
@@ -1097,8 +1002,6 @@ export default function UsersPage() {
 
             </h3>
 
-
-
             <span className="text-[11px] text-slate-500">
 
               Last 50 activities
@@ -1106,8 +1009,6 @@ export default function UsersPage() {
             </span>
 
           </div>
-
-
 
           <div className="max-h-[420px] overflow-y-auto rounded-xl border border-slate-800">
 
@@ -1145,8 +1046,6 @@ export default function UsersPage() {
 
                       </div>
 
-
-
                       <div className="min-w-0">
 
                         <p className="text-xs font-semibold text-white">
@@ -1155,23 +1054,17 @@ export default function UsersPage() {
 
                         </p>
 
-
-
                         <p className="mt-1 truncate font-mono text-[10px] text-slate-400">
 
                           User: {item.userId}
 
                         </p>
 
-
-
                         <p className="mt-1 truncate text-[11px] text-indigo-300">
 
                           {item.pageUrl || 'No page URL'}
 
                         </p>
-
-
 
                         <p className="mt-1 text-[10px] text-slate-500">
 
@@ -1184,8 +1077,6 @@ export default function UsersPage() {
                       </div>
 
                     </div>
-
-
 
                     <div className="flex shrink-0 items-center gap-1.5 text-[10px] text-slate-500">
 
@@ -1209,8 +1100,6 @@ export default function UsersPage() {
 
       </Card>
 
-
-
       {/* Existing KPI Cards */}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -1225,21 +1114,15 @@ export default function UsersPage() {
 
             </span>
 
-
-
             <Users className="h-4 w-4 text-indigo-400" />
 
           </div>
-
-
 
           <div className="mt-2 text-2xl font-bold text-white">
 
             {loading ? '—' : formatNumber(totalUsers)}
 
           </div>
-
-
 
           <div className="mt-1 text-[11px] text-slate-400">
 
@@ -1248,8 +1131,6 @@ export default function UsersPage() {
           </div>
 
         </Card>
-
-
 
         <Card className="p-4">
 
@@ -1261,21 +1142,15 @@ export default function UsersPage() {
 
             </span>
 
-
-
             <UserPlus className="h-4 w-4 text-emerald-400" />
 
           </div>
-
-
 
           <div className="mt-2 text-2xl font-bold text-white">
 
             {loading ? '—' : formatNumber(newUsers)}
 
           </div>
-
-
 
           <div className="mt-1 text-[11px] text-slate-400">
 
@@ -1284,8 +1159,6 @@ export default function UsersPage() {
           </div>
 
         </Card>
-
-
 
         <Card className="p-4">
 
@@ -1297,13 +1170,9 @@ export default function UsersPage() {
 
             </span>
 
-
-
             <UserCheck className="h-4 w-4 text-blue-400" />
 
           </div>
-
-
 
           <div className="mt-2 text-2xl font-bold text-white">
 
@@ -1315,8 +1184,6 @@ export default function UsersPage() {
 
           </div>
 
-
-
           <div className="mt-1 text-[11px] text-slate-400">
 
             Users seen before this period
@@ -1324,8 +1191,6 @@ export default function UsersPage() {
           </div>
 
         </Card>
-
-
 
         <Card className="p-4">
 
@@ -1337,21 +1202,15 @@ export default function UsersPage() {
 
             </span>
 
-
-
             <Activity className="h-4 w-4 text-indigo-400" />
 
           </div>
-
-
 
           <div className="mt-2 text-2xl font-bold text-white">
 
             {loading ? '—' : formatNumber(activeUsers)}
 
           </div>
-
-
 
           <div className="mt-1 text-[11px] text-slate-400">
 
@@ -1363,8 +1222,6 @@ export default function UsersPage() {
 
       </div>
 
-
-
       {/* User Growth Chart */}
 
       <Card className="p-6">
@@ -1375,8 +1232,6 @@ export default function UsersPage() {
 
             <CardTitle>Active User Growth Trend</CardTitle>
 
-
-
             <CardDescription>
 
               Daily unique users with activity during the past 30 days
@@ -1385,13 +1240,9 @@ export default function UsersPage() {
 
           </div>
 
-
-
           <Badge variant="neutral">Last 30 Days</Badge>
 
         </CardHeader>
-
-
 
         <div className="pt-4">
 
@@ -1429,8 +1280,6 @@ export default function UsersPage() {
 
       </Card>
 
-
-
       {/* Users Table */}
 
       <Card className="overflow-hidden p-0">
@@ -1444,8 +1293,6 @@ export default function UsersPage() {
             <div className="relative w-full flex-1 sm:w-64">
 
               <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-
-
 
               <input
 
@@ -1462,8 +1309,6 @@ export default function UsersPage() {
               />
 
             </div>
-
-
 
             <select
 
@@ -1487,8 +1332,6 @@ export default function UsersPage() {
 
           </div>
 
-
-
           <div className="text-xs text-slate-400">
 
             Click any user to view their event journey
@@ -1496,8 +1339,6 @@ export default function UsersPage() {
           </div>
 
         </div>
-
-
 
         {/* Table */}
 
@@ -1527,15 +1368,11 @@ export default function UsersPage() {
 
                 </th>
 
-
-
                 <th className="hidden px-4 py-3 font-semibold md:table-cell">
 
                   User ID
 
                 </th>
-
-
 
                 <th className="hidden px-4 py-3 font-semibold sm:table-cell">
 
@@ -1543,23 +1380,17 @@ export default function UsersPage() {
 
                 </th>
 
-
-
                 <th className="hidden px-4 py-3 font-semibold lg:table-cell">
 
                   First Seen
 
                 </th>
 
-
-
                 <th className="px-4 py-3 font-semibold">
 
                   Last Active
 
                 </th>
-
-
 
                 <th
 
@@ -1579,8 +1410,6 @@ export default function UsersPage() {
 
                 </th>
 
-
-
                 <th
 
                   onClick={() => handleSort('sessionsCount')}
@@ -1599,8 +1428,6 @@ export default function UsersPage() {
 
                 </th>
 
-
-
                 <th className="px-4 py-3 text-center font-semibold">
 
                   Status
@@ -1610,8 +1437,6 @@ export default function UsersPage() {
               </tr>
 
             </thead>
-
-
 
             <tbody className="divide-y divide-slate-800/60">
 
@@ -1682,9 +1507,13 @@ export default function UsersPage() {
                     key={user.id}
 
                     onClick={() => {
+
                       setJourneyPage(1);
+
                       setJourneySessionId('All');
+
                       setSelectedUser(user);
+
                     }}
 
                     className="group cursor-pointer transition-colors hover:bg-slate-800/40"
@@ -1701,8 +1530,6 @@ export default function UsersPage() {
 
                         </div>
 
-
-
                         <div>
 
                           <div className="font-semibold text-white transition-colors group-hover:text-indigo-300">
@@ -1710,8 +1537,6 @@ export default function UsersPage() {
                             {user.name}
 
                           </div>
-
-
 
                           <div className="text-[11px] text-slate-400">
 
@@ -1725,15 +1550,11 @@ export default function UsersPage() {
 
                     </td>
 
-
-
                     <td className="hidden px-4 py-3 font-mono text-[11px] text-slate-400 md:table-cell">
 
                       {user.id}
 
                     </td>
-
-
 
                     <td className="hidden px-4 py-3 text-slate-300 sm:table-cell">
 
@@ -1741,15 +1562,11 @@ export default function UsersPage() {
 
                     </td>
 
-
-
                     <td className="hidden px-4 py-3 font-mono text-[11px] text-slate-400 lg:table-cell">
 
                       {formatDate(user.firstSeen)}
 
                     </td>
-
-
 
                     <td className="px-4 py-3 text-slate-300">
 
@@ -1757,23 +1574,17 @@ export default function UsersPage() {
 
                     </td>
 
-
-
                     <td className="px-4 py-3 text-right font-mono font-semibold text-white">
 
                       {formatNumber(user.totalEvents)}
 
                     </td>
 
-
-
                     <td className="hidden px-4 py-3 text-right font-mono text-slate-300 sm:table-cell">
 
                       {formatNumber(user.sessionsCount)}
 
                     </td>
-
-
 
                     <td className="px-4 py-3 text-center">
 
@@ -1815,8 +1626,6 @@ export default function UsersPage() {
 
         </div>
 
-
-
         {/* Table Footer */}
 
         {!loading && !error && (
@@ -1831,8 +1640,6 @@ export default function UsersPage() {
 
       </Card>
 
-
-
       {/* User Details SlideOver */}
 
       {selectedUser && (
@@ -1842,9 +1649,13 @@ export default function UsersPage() {
           isOpen={!!selectedUser}
 
           onClose={() => {
+
             setSelectedUser(null);
+
             setJourneyPage(1);
+
             setJourneySessionId('All');
+
           }}
 
           title={selectedUser.name}
@@ -1869,8 +1680,6 @@ export default function UsersPage() {
 
                 </div>
 
-
-
                 <div className="mt-1 text-lg font-bold text-white">
 
                   {formatNumber(selectedUser.totalEvents)}
@@ -1878,8 +1687,6 @@ export default function UsersPage() {
                 </div>
 
               </div>
-
-
 
               <div className="rounded-lg border border-slate-800 bg-slate-900/90 p-3">
 
@@ -1889,8 +1696,6 @@ export default function UsersPage() {
 
                 </div>
 
-
-
                 <div className="mt-1 text-lg font-bold text-white">
 
                   {formatNumber(selectedUser.sessionsCount)}
@@ -1898,8 +1703,6 @@ export default function UsersPage() {
                 </div>
 
               </div>
-
-
 
               <div className="rounded-lg border border-slate-800 bg-slate-900/90 p-3">
 
@@ -1909,8 +1712,6 @@ export default function UsersPage() {
 
                 </div>
 
-
-
                 <div className="mt-1 truncate text-sm font-semibold text-white">
 
                   {selectedUser.country}
@@ -1919,8 +1720,6 @@ export default function UsersPage() {
 
               </div>
 
-
-
               <div className="rounded-lg border border-slate-800 bg-slate-900/90 p-3">
 
                 <div className="text-[10px] font-semibold uppercase text-slate-500">
@@ -1928,8 +1727,6 @@ export default function UsersPage() {
                   Device
 
                 </div>
-
-
 
                 <div className="mt-1 truncate text-sm font-semibold text-white">
 
@@ -1941,8 +1738,6 @@ export default function UsersPage() {
 
             </div>
 
-
-
             {/* Top Visited Pages */}
 
             <div>
@@ -1952,8 +1747,6 @@ export default function UsersPage() {
                 Top Visited Pages
 
               </h4>
-
-
 
               <div className="divide-y divide-slate-800/80 rounded-lg border border-slate-800 bg-slate-900/60">
 
@@ -1983,8 +1776,6 @@ export default function UsersPage() {
 
                       </span>
 
-
-
                       <span className="shrink-0 text-slate-400">
 
                         {formatNumber(page.visits)} visits
@@ -2001,8 +1792,6 @@ export default function UsersPage() {
 
             </div>
 
-
-
             {/* Activity Timeline */}
 
             <div>
@@ -2013,8 +1802,6 @@ export default function UsersPage() {
 
               </h4>
 
-
-
               <div className="relative space-y-3 pl-6 before:absolute before:bottom-2 before:left-2 before:top-2 before:w-0.5 before:bg-slate-800">
 
                 {selectedUser.timeline.map((item) => (
@@ -2023,15 +1810,11 @@ export default function UsersPage() {
 
                     <span className="absolute -left-6 top-1 h-2.5 w-2.5 rounded-full border-2 border-indigo-500 bg-[#0B0F19]" />
 
-
-
                     <div className="font-medium text-slate-200">
 
                       {item.action}
 
                     </div>
-
-
 
                     <div className="mt-0.5 text-[11px] text-slate-500">
 
@@ -2047,8 +1830,6 @@ export default function UsersPage() {
 
             </div>
 
-
-
             {/* Recent Events */}
 
             <div>
@@ -2058,8 +1839,6 @@ export default function UsersPage() {
                 Recent Ingested Events
 
               </h4>
-
-
 
               <div className="divide-y divide-slate-800/60 rounded-lg border border-slate-800 bg-[#070A10] p-3 font-mono text-xs">
 
@@ -2091,8 +1870,6 @@ export default function UsersPage() {
 
                         </span>
 
-
-
                         <span className="ml-2 text-slate-500">
 
                           page: {event.page}
@@ -2100,8 +1877,6 @@ export default function UsersPage() {
                         </span>
 
                       </div>
-
-
 
                       <span className="shrink-0 text-[10px] text-slate-500">
 
@@ -2120,119 +1895,223 @@ export default function UsersPage() {
             </div>
 
             {/* Real-Time User Journey */}
+
             <section className="space-y-4 border-t border-slate-800 pt-5">
+
               <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+
                 <div>
+
                   <div className="flex items-center gap-2">
+
                     <Activity className="h-4 w-4 text-emerald-400" />
+
                     <h4 className="text-sm font-semibold text-white">Real-Time User Journey</h4>
+
                     <Badge variant="success">AUTO REFRESH</Badge>
+
                   </div>
+
                   <p className="mt-1 text-[11px] text-slate-500">Complete event history, page navigation and session context. Refreshes every 10 seconds.</p>
+
                 </div>
+
                 <select
+
                   value={journeySessionId}
+
                   onChange={(event) => { setJourneySessionId(event.target.value); setJourneyPage(1); }}
+
                   className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white focus:border-indigo-500 focus:outline-none"
+
                 >
+
                   <option value="All">All sessions</option>
+
                   {(journeyData?.sessions ?? []).map((session) => (
+
                     <option key={session.sessionId} value={session.sessionId}>
+
                       {session.sessionId.slice(0, 18)}… ({session.eventCount} events)
+
                     </option>
+
                   ))}
+
                 </select>
+
               </div>
 
               {journeyError && <p className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-3 text-xs text-rose-400">{journeyError}</p>}
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+
                 {[
+
                   { label: 'Total Events', value: journeyData?.user.totalEvents ?? selectedUser.totalEvents },
+
                   { label: 'Total Sessions', value: journeyData?.user.totalSessions ?? selectedUser.sessionsCount },
+
                   { label: 'Pages Visited', value: journeyData?.user.totalPagesVisited ?? selectedUser.topPages.length },
+
                 ].map((item) => (
+
                   <div key={item.label} className="rounded-lg border border-slate-800 bg-slate-900/70 p-3">
+
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{item.label}</p>
+
                     <p className="mt-1 text-xl font-bold text-white">{formatNumber(item.value)}</p>
+
                   </div>
+
                 ))}
+
               </div>
 
               <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-3">
+
                 <div className="mb-3 flex items-center justify-between">
+
                   <h5 className="text-xs font-semibold text-white">Session Overview</h5>
+
                   <span className="text-[10px] text-slate-500">{journeyData?.sessions.length ?? 0} sessions in loaded events</span>
+
                 </div>
+
                 {!journeyData?.sessions.length ? (
+
                   <p className="text-xs text-slate-500">{journeyLoading ? 'Loading sessions…' : 'No session summary available for this result page.'}</p>
+
                 ) : (
+
                   <div className="space-y-2">
+
                     {journeyData.sessions.map((session) => (
+
                       <button key={session.sessionId} type="button" onClick={() => { setJourneySessionId(session.sessionId); setJourneyPage(1); }} className={`flex w-full flex-col gap-1 rounded-lg border p-3 text-left transition-colors sm:flex-row sm:items-center sm:justify-between ${journeySessionId === session.sessionId ? 'border-indigo-500/50 bg-indigo-500/10' : 'border-slate-800 bg-slate-950/50 hover:bg-slate-800/50'}`}>
+
                         <span className="min-w-0 truncate font-mono text-[10px] text-indigo-300">{session.sessionId}</span>
+
                         <span className="text-[10px] text-slate-400">{session.eventCount} events · {session.uniquePages} pages · {formatDateTime(session.startedAt)}</span>
+
                       </button>
+
                     ))}
+
                   </div>
+
                 )}
+
               </div>
 
               <div>
+
                 <div className="mb-3 flex items-center justify-between">
+
                   <h5 className="text-xs font-semibold text-white">Event Timeline</h5>
+
                   <span className="text-[10px] text-slate-500">{journeyData?.pagination.totalEvents ?? 0} matching events</span>
+
                 </div>
+
                 {journeyLoading && !journeyData ? (
+
                   <div className="rounded-lg border border-slate-800 p-8 text-center text-xs text-slate-400">Loading user journey…</div>
+
                 ) : !journeyData?.events.length ? (
+
                   <div className="rounded-lg border border-slate-800 p-8 text-center text-xs text-slate-400">No events found for this user and session.</div>
+
                 ) : (
+
                   <div className="relative space-y-3 pl-5 before:absolute before:bottom-3 before:left-[5px] before:top-2 before:w-px before:bg-slate-700">
+
                     {journeyData.events.map((event) => (
+
                       <article key={event.id} className="relative rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+
                         <span className="absolute -left-[21px] top-4 h-2.5 w-2.5 rounded-full border-2 border-indigo-400 bg-[#0B0F19]" />
+
                         <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-start">
+
                           <div className="min-w-0">
+
                             <p className="text-xs font-semibold text-white">{event.eventName}</p>
+
                             {event.pageUrl && (
+
                               <a href={event.pageUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="mt-1 inline-flex max-w-full items-center gap-1 truncate text-[11px] text-indigo-300 hover:text-indigo-200">
+
                                 <span className="truncate">{event.pageUrl}</span><ExternalLink className="h-3 w-3 shrink-0" />
+
                               </a>
+
                             )}
+
                           </div>
+
                           <time className="shrink-0 text-[10px] text-slate-500">{formatDateTime(event.timestamp)}</time>
+
                         </div>
+
                         <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-slate-400">
+
                           <span className="rounded bg-slate-800 px-2 py-1">{event.device}</span>
+
                           <span className="rounded bg-slate-800 px-2 py-1">{event.browser}</span>
+
                           <span className="rounded bg-slate-800 px-2 py-1">{event.country}</span>
+
                           <span className="rounded bg-slate-800 px-2 py-1">{event.projectName}</span>
+
                         </div>
+
                         {event.sessionId && <p className="mt-2 break-all font-mono text-[9px] text-slate-600">Session: {event.sessionId}</p>}
+
                         {event.properties !== null && event.properties !== undefined && (
+
                           <details className="mt-2">
+
                             <summary className="cursor-pointer text-[10px] text-indigo-300 hover:text-indigo-200">View event properties</summary>
+
                             <pre className="mt-2 max-h-48 overflow-auto rounded-md bg-[#070A10] p-3 text-[10px] text-slate-300">{JSON.stringify(event.properties, null, 2)}</pre>
+
                           </details>
+
                         )}
+
                       </article>
+
                     ))}
+
                   </div>
+
                 )}
+
               </div>
 
               {journeyData?.pagination && (
+
                 <div className="flex flex-col justify-between gap-3 border-t border-slate-800 pt-3 sm:flex-row sm:items-center">
+
                   <p className="text-[10px] text-slate-500">Page {journeyData.pagination.page} of {Math.max(journeyData.pagination.totalPages, 1)} · Showing {journeyData.events.length} events</p>
+
                   <div className="flex items-center gap-2">
+
                     <button type="button" disabled={!journeyData.pagination.hasPreviousPage} onClick={() => setJourneyPage((page) => Math.max(1, page - 1))} className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"><ChevronLeft className="h-3.5 w-3.5" /> Previous</button>
+
                     <button type="button" disabled={!journeyData.pagination.hasNextPage} onClick={() => setJourneyPage((page) => page + 1)} className="inline-flex items-center gap-1 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40">Next <ChevronRight className="h-3.5 w-3.5" /></button>
+
                   </div>
+
                 </div>
+
               )}
+
             </section>
+
           </div>
+
         </SlideOver>
 
       )}

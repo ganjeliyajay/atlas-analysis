@@ -604,17 +604,17 @@ export default function RetentionPage() {
         </div>
 
         {/* Hover Details */}
-        {hoveredCell && hoveredCell.val !== null && (
+        {hoveredCell && hoveredCell.val !== null && cohorts[hoveredCell.cohortIndex] && (
           <div className="flex flex-col gap-2 border-t border-slate-800 bg-slate-900/80 p-3 text-xs text-slate-300 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <span className="font-semibold text-white">
-                {cohorts[hoveredCell.cohortIndex].cohortDate}
+                {cohorts[hoveredCell.cohortIndex]?.cohortDate}
               </span>
 
               <span className="mx-2 text-slate-600">•</span>
 
               <span>
-                {periodLabels[hoveredCell.weekIndex]}:
+                {periodLabels[hoveredCell.weekIndex] ?? 'Period'}:
               </span>
 
               <span className="ml-2 font-bold text-indigo-400">
@@ -624,9 +624,9 @@ export default function RetentionPage() {
               <span className="ml-2 text-slate-400">
                 (
                 {Math.round(
-                  (cohorts[hoveredCell.cohortIndex].totalUsers *
+                  (((cohorts[hoveredCell.cohortIndex]?.totalUsers ?? 0) *
                     hoveredCell.val) /
-                    100
+                    100)
                 ).toLocaleString()}
                 active users)
               </span>
@@ -636,7 +636,7 @@ export default function RetentionPage() {
               Cohort size:{' '}
               {cohorts[
                 hoveredCell.cohortIndex
-              ].totalUsers.toLocaleString()}
+              ]?.totalUsers.toLocaleString()}
             </span>
           </div>
         )}

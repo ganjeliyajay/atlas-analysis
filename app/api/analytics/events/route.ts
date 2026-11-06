@@ -18,7 +18,6 @@ const querySchema = z.object({
 });
 
 function parseDate(value: string, endOfDay = false): Date | null {
-  // Date inputs send YYYY-MM-DD; parse them in local server timezone boundaries.
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
 
   const date = dateOnly
@@ -39,6 +38,7 @@ export const GET = auth(async function GET(request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // Resolve the user's organization membership.
     const membership = await withUserContext(
       userIdFromSession,
       async (tx) => {
@@ -140,6 +140,7 @@ export const GET = auth(async function GET(request) {
       );
     }
 
+    // All tenant-owned analytics queries run in one tenant transaction.
     return await withTenantContext(
       userIdFromSession,
       membership.organizationId,

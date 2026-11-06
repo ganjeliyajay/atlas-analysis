@@ -180,7 +180,7 @@ export default function LiveEventsPage() {
 
   // Live analytics derived from the events currently held in the 40-event buffer.
   const analytics = useMemo(() => {
-    const now = Date.now();
+    const now = lastUpdated?.getTime() ?? 0;
 
     const lastTenSeconds = events.filter((event) => {
       const timestamp = new Date(event.timestamp).getTime();
@@ -214,7 +214,7 @@ export default function LiveEventsPage() {
 
   // Twelve 5-second buckets make up the last 60 seconds of activity.
   const activityData = useMemo(() => {
-    const now = Date.now();
+    const now = lastUpdated?.getTime() ?? 0;
     const buckets = Array.from({ length: 12 }, (_, index) => ({
       label: `${(11 - index) * 5}s`,
       count: 0,
@@ -228,7 +228,10 @@ export default function LiveEventsPage() {
       const bucketIndex = Math.floor(ageInSeconds / 5);
 
       if (bucketIndex >= 0 && bucketIndex < 12) {
-        buckets[11 - bucketIndex].count += 1;
+        const targetBucket = buckets[11 - bucketIndex];
+        if (targetBucket) {
+          targetBucket.count += 1;
+        }
       }
     });
 
@@ -341,19 +344,28 @@ export default function LiveEventsPage() {
     }
   }, [selectedProject]);
 
+  // Sync connection status when streaming is paused.
+  useEffect(() => {
+    if (!isStreaming) {
+      void Promise.resolve().then(() => setConnectionStatus('paused'));
+    }
+  }, [isStreaming]);
+
   // SSE connection.
   useEffect(() => {
     if (!isStreaming) {
-      setConnectionStatus('paused');
       return;
     }
 
     let active = true;
     let hasConnected = false;
 
-    setConnectionStatus('connecting');
-    setIsLoading(true);
-    setError(null);
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      setConnectionStatus('connecting');
+      setIsLoading(true);
+      setError(null);
+    });
 
     const queryParams = new URLSearchParams({
       stream: 'true',

@@ -69,7 +69,7 @@ function calculateFunnel(
     }
 
     for (let index = 0; index < currentStep; index++) {
-      counts[index]++;
+      counts[index] = (counts[index] ?? 0) + 1;
     }
   }
 
@@ -301,7 +301,7 @@ export const POST = auth(async function POST(request) {
         if (range === "today") {
           startDate.setHours(0, 0, 0, 0);
         } else {
-          startDate.setDate(startDate.getDate() - RANGE_DAYS[range]);
+          startDate.setDate(startDate.getDate() - (RANGE_DAYS[range] ?? 7));
         }
 
         const allEventNames = Array.from(
@@ -365,12 +365,13 @@ export const POST = auth(async function POST(request) {
             b.overallConversionRate - a.overallConversionRate,
         );
 
+        const topFunnel = rankedFunnels[0];
         const bestPerformingFunnel =
-          rankedFunnels.length > 0 && rankedFunnels[0].totalUsers > 0
+          topFunnel && topFunnel.totalUsers > 0
             ? {
-                id: rankedFunnels[0].id,
-                name: rankedFunnels[0].name,
-                conversionRate: rankedFunnels[0].overallConversionRate,
+                id: topFunnel.id,
+                name: topFunnel.name,
+                conversionRate: topFunnel.overallConversionRate,
               }
             : null;
 

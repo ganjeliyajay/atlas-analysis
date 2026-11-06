@@ -1,47 +1,26 @@
-import { NextResponse } from "next/server"
-import { auth } from "@/auth"
-import { withUserContext } from "@/lib/db-context"
+import { NextResponse } from "next/server";
+import { auth } from "@/auth";
+import { getCurrentOrganization } from "@/lib/organization";
 
 export const GET = auth(async function GET(req) {
   try {
-    const session = req.auth
+    const session = req.auth;
 
     if (!session?.user?.id) {
-      return NextResponse.json({ message: "Unauthorized" }, { status: 401 })
+      return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
     }
 
-    const membership = await withUserContext(session.user.id, async (tx) => {
-      return tx.organizationMember.findFirst({
-        where: {
-          userId: session.user.id,
-        },
-        include: {
-          organization: true,
-        },
-        orderBy: {
-          createdAt: "asc",
-        },
-      })
-    })
-
-    if (!membership) {
-      return NextResponse.json({ organization: null }, { status: 200 })
-    }
+    const org = await getCurrentOrganization();
 
     return NextResponse.json({
-      organization: {
-        id: membership.organization.id,
-        name: membership.organization.name,
-        slug: membership.organization.slug,
-        role: membership.role,
-      },
-    })
+      organization: org,
+    });
   } catch (error) {
-    console.error("Current organization error:", error)
+    console.error("Current organization error:", error);
 
     return NextResponse.json(
       { message: "Unable to load organization" },
-      { status: 500 },  
-    )
-  } 
-})
+      { status: 500 }
+    );
+  }
+});

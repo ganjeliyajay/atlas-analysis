@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { signOut } from 'next-auth/react';
 import {
   BarChart3,
@@ -34,36 +34,102 @@ interface DashboardSidebarProps {
   onMobileClose: () => void;
 }
 
+interface OrgWorkspace {
+  id: string;
+  name: string;
+  slug: string;
+  role: string;
+  isCurrent?: boolean;
+}
+
+const DEFAULT_WORKSPACE: OrgWorkspace = {
+  id: 'default',
+  name: 'Atlas Analytics',
+  slug: 'atlas',
+  role: 'owner',
+  isCurrent: true,
+};
+
 export function DashboardSidebar({ mobileOpen, onMobileClose }: DashboardSidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
-  const [currentWorkspace, setCurrentWorkspace] = useState(WORKSPACES[0]);
+  const [organizations, setOrganizations] = useState<OrgWorkspace[]>([DEFAULT_WORKSPACE]);
+  const [activeOrgId, setActiveOrgId] = useState<string>('default');
 
   const [profileName, setProfileName] = useState('User');
   const [profileEmail, setProfileEmail] = useState('');
 
   useEffect(() => {
     let isMounted = true;
-    async function loadUser() {
+    async function loadData() {
       try {
-        const response = await fetch('/api/auth/session');
-        if (response.ok) {
-          const data = await response.json();
+        const [sessionRes, orgsRes] = await Promise.all([
+          fetch('/api/auth/session'),
+          fetch('/api/organization/list'),
+        ]);
+
+        if (sessionRes.ok) {
+          const data = await sessionRes.json();
           if (isMounted && data.user) {
             setProfileName(data.user.name || 'User');
             setProfileEmail(data.user.email || '');
           }
         }
+
+        if (orgsRes.ok) {
+          const orgData = await orgsRes.json();
+          if (isMounted && orgData.organizations && orgData.organizations.length > 0) {
+            setOrganizations(orgData.organizations);
+            const current = orgData.organizations.find((o: OrgWorkspace) => o.isCurrent) || orgData.organizations[0];
+            if (current) {
+              setActiveOrgId(current.id);
+            }
+          }
+        }
       } catch (err) {
-        console.error('Sidebar session fetch error:', err);
+        console.error('Sidebar data fetch error:', err);
       }
     }
-    loadUser();
+    loadData();
     return () => {
       isMounted = false;
     };
   }, []);
+
+  const currentWorkspace =
+    organizations.find((o) => o.id === activeOrgId) ||
+    organizations[0] ||
+    DEFAULT_WORKSPACE;
+
+  const handleSwitchWorkspace = async (org: OrgWorkspace) => {
+    const previousOrgId = activeOrgId;
+    setActiveOrgId(org.id);
+    setWorkspaceMenuOpen(false);
+
+    try {
+      const res = await fetch('/api/organization/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ organizationId: org.id }),
+      });
+
+      if (!res.ok) {
+        setActiveOrgId(previousOrgId);
+        const payload: unknown = await res.json().catch(() => null);
+        console.error('Organization switch was rejected:', payload);
+        return;
+      }
+
+      // Refresh Server Components with the newly verified HTTP-only cookie.
+      // This updates tenant-scoped data without a full document reload.
+      router.refresh();
+    } catch (err) {
+      setActiveOrgId(previousOrgId);
+      console.error('Error switching workspace:', err);
+    }
+  };
 
   const initials = profileName
     .split(' ')
@@ -135,7 +201,7 @@ export function DashboardSidebar({ mobileOpen, onMobileClose }: DashboardSidebar
                     {currentWorkspace.name}
                   </div>
                   <div className="text-[10px] text-slate-400 uppercase tracking-wider">
-                    {currentWorkspace.plan} plan
+                    {currentWorkspace.role}
                   </div>
                 </div>
               </div>
@@ -146,24 +212,21 @@ export function DashboardSidebar({ mobileOpen, onMobileClose }: DashboardSidebar
             {workspaceMenuOpen && (
               <div className="absolute left-3 right-3 top-16 z-30 rounded-lg border border-slate-700 bg-[#0F172A] p-1.5 shadow-xl">
                 <div className="text-[10px] font-semibold text-slate-500 uppercase px-2 py-1">
-                  Your Workspaces
+                  Your Organizations
                 </div>
-                {WORKSPACES.map((ws) => (
+                {organizations.map((org) => (
                   <button
-                    key={ws.id}
-                    onClick={() => {
-                      setCurrentWorkspace(ws);
-                      setWorkspaceMenuOpen(false);
-                    }}
+                    key={org.id}
+                    onClick={() => handleSwitchWorkspace(org)}
                     className={cn(
                       'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs transition-colors',
-                      ws.id === currentWorkspace.id
+                      org.id === currentWorkspace.id
                         ? 'bg-indigo-600/20 text-indigo-300 font-medium'
                         : 'text-slate-300 hover:bg-slate-800'
                     )}
                   >
-                    <span className="truncate">{ws.name}</span>
-                    {ws.id === currentWorkspace.id && <Check className="h-3.5 w-3.5 text-indigo-400" />}
+                    <span className="truncate">{org.name}</span>
+                    {org.id === currentWorkspace.id && <Check className="h-3.5 w-3.5 text-indigo-400" />}
                   </button>
                 ))}
               </div>
@@ -172,7 +235,7 @@ export function DashboardSidebar({ mobileOpen, onMobileClose }: DashboardSidebar
         ) : (
           <div className="p-3 border-b border-slate-800/60 flex justify-center">
             <div className="h-7 w-7 rounded-md bg-slate-800 flex items-center justify-center text-indigo-400 font-bold text-xs">
-              {currentWorkspace.name[0]}
+              {currentWorkspace.name[0] ?? 'A'}
             </div>
           </div>
         )}

@@ -158,7 +158,7 @@ export function getTimeseriesData(range: DateRangeOption = '30d'): TimeseriesPoi
   const results: TimeseriesPoint[] = [];
 
   for (let i = 0; i < pointsCount; i++) {
-    const dayLabel = baseDates[i % baseDates.length];
+    const dayLabel = baseDates[i % baseDates.length] ?? `Day ${i + 1}`;
     const wave = Math.sin((i / pointsCount) * Math.PI * 2) * 0.2 + 1;
     const factor = (i + 1) * 0.05 + 0.8;
 
