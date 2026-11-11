@@ -1,79 +1,80 @@
-/**
- * In-memory sliding window rate limiter.
- * Tracks request counts per key and cleans up expired entries automatically.
- */
+import { withIngestionTenantContext } from "@/lib/db-context";
 
-interface RateLimitRecord {
-  count: number;
-  resetAt: number;
-}
-
-const rateLimitStore = new Map<string, RateLimitRecord>();
-
-// Periodic cleanup every 60 seconds
-if (typeof setInterval !== 'undefined') {
-  const cleanupTimer = setInterval(() => {
-    const now = Date.now();
-    for (const [key, record] of rateLimitStore.entries()) {
-      if (record.resetAt <= now) {
-        rateLimitStore.delete(key);
-      }
-    }
-  }, 60000);
-
-  // Do not hold the Node.js event loop open for the cleanup timer
-  if (cleanupTimer.unref) {
-    cleanupTimer.unref();
-  }
-}
+const DEFAULT_CAPACITY = 10_000;
+const DEFAULT_REFILL_PER_SECOND = 200;
 
 export interface RateLimitOptions {
+  organizationId: string;
   key: string;
-  limit?: number; // Maximum allowed requests per window (default 120)
-  windowMs?: number; // Time window in milliseconds (default 60_000ms = 1 min)
+  requestedTokens?: number;
+  capacity?: number;
+  refillPerSecond?: number;
 }
 
 export interface RateLimitResult {
   success: boolean;
   limit: number;
   remaining: number;
-  reset: number; // Unix timestamp in seconds
+  reset: number;
+  retryAfterSeconds: number;
 }
 
-export function checkRateLimit({
+interface TokenBucketRow {
+  allowed: boolean;
+  remaining: string | number;
+  retry_after_seconds: number;
+}
+
+/**
+ * PostgreSQL token bucket scoped by the same transaction-local tenant context
+ * as ingestion writes. One token is consumed per event in the validated batch.
+ */
+export async function checkRateLimit({
+  organizationId,
   key,
-  limit = 120,
-  windowMs = 60000,
-}: RateLimitOptions): RateLimitResult {
-  const now = Date.now();
-  const existing = rateLimitStore.get(key);
-
-  if (!existing || existing.resetAt <= now) {
-    const resetAt = now + windowMs;
-    rateLimitStore.set(key, { count: 1, resetAt });
-    return {
-      success: true,
-      limit,
-      remaining: limit - 1,
-      reset: Math.ceil(resetAt / 1000),
-    };
+  requestedTokens = 1,
+  capacity = DEFAULT_CAPACITY,
+  refillPerSecond = DEFAULT_REFILL_PER_SECOND,
+}: RateLimitOptions): Promise<RateLimitResult> {
+  if (
+    !organizationId.trim() ||
+    !key.trim() ||
+    !Number.isInteger(requestedTokens) ||
+    requestedTokens < 1
+  ) {
+    throw new Error("Invalid rate limit request");
   }
 
-  if (existing.count >= limit) {
-    return {
-      success: false,
-      limit,
-      remaining: 0,
-      reset: Math.ceil(existing.resetAt / 1000),
-    };
+  const rows: TokenBucketRow[] = await withIngestionTenantContext(organizationId, (tx) =>
+    tx.$queryRaw<TokenBucketRow[]>`
+      SELECT *
+      FROM consume_ingestion_tokens(
+        ${organizationId},
+        ${key},
+        ${capacity},
+        ${refillPerSecond},
+        ${requestedTokens}
+      )
+    `,
+  );
+
+  const row = rows[0];
+  if (!row) {
+    throw new Error("Token bucket did not return a result");
   }
 
-  existing.count += 1;
+  const remaining = Number(row.remaining);
+  const retryAfterSeconds = Number(row.retry_after_seconds);
+  const reset = Math.ceil(Date.now() / 1000) +
+    (row.allowed
+      ? Math.ceil((capacity - remaining) / refillPerSecond)
+      : retryAfterSeconds);
+
   return {
-    success: true,
-    limit,
-    remaining: limit - existing.count,
-    reset: Math.ceil(existing.resetAt / 1000),
+    success: row.allowed,
+    limit: capacity,
+    remaining: Math.max(0, Math.floor(remaining)),
+    reset,
+    retryAfterSeconds,
   };
 }
-

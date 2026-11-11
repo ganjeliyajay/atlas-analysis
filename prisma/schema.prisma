@@ -33,10 +33,13 @@ model Organization {
   ownerId String
   owner   User   @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
 
-  members     OrganizationMember[]
-  projects    Project[]
-  invitations Invitation[]
-  apiKeys     ApiKey[]
+  members            OrganizationMember[]
+  projects           Project[]
+  invitations        Invitation[]
+  apiKeys            ApiKey[]
+  rateLimitBuckets   IngestionRateLimitBucket[]
+  hourlyRollups      EventHourlyRollup[]
+  dailyRollups       EventDailyRollup[]
 
   eventQuota Int                 @default(100000)
   usage      OrganizationUsage[]
@@ -188,4 +191,54 @@ model ApiKey {
   @@index([projectId])
   @@index([keyPrefix])
   @@map("api_keys")
+}
+
+model IngestionRateLimitBucket {
+  id             String   @id @default(uuid())
+  organizationId String
+  keyHash        String
+  tokens         Decimal  @db.Decimal(20, 6)
+  lastRefillAt   DateTime @db.Timestamp(3)
+  createdAt      DateTime @default(now()) @db.Timestamp(3)
+  updatedAt      DateTime @updatedAt @db.Timestamp(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, keyHash])
+  @@index([updatedAt])
+  @@map("ingestion_token_buckets")
+}
+
+model EventHourlyRollup {
+  organizationId String
+  bucketStart    DateTime @db.Timestamp(6)
+  eventName      String
+  eventCount     BigInt
+  uniqueUsers    BigInt
+  uniqueSessions BigInt
+  updatedAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, bucketStart, eventName])
+  @@index([bucketStart], map: "event_hourly_rollups_bucket_idx")
+  @@index([organizationId, eventName, bucketStart], map: "event_hourly_rollups_organization_event_bucket_idx")
+  @@map("event_hourly_rollups")
+}
+
+model EventDailyRollup {
+  organizationId String
+  bucketStart    DateTime @db.Date
+  eventName      String
+  eventCount     BigInt
+  uniqueUsers    BigInt
+  uniqueSessions BigInt
+  updatedAt      DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, bucketStart, eventName])
+  @@index([bucketStart], map: "event_daily_rollups_bucket_idx")
+  @@index([organizationId, eventName, bucketStart], map: "event_daily_rollups_organization_event_bucket_idx")
+  @@map("event_daily_rollups")
 }

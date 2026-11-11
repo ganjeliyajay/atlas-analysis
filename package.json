@@ -8,7 +8,14 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "seed:phase2": "node --env-file-if-exists=.env scripts/seed-phase2.mjs",
+    "benchmark:dau": "node --env-file-if-exists=.env scripts/benchmark-dau.mjs",
+    "benchmark:ingest": "node --env-file-if-exists=.env scripts/benchmark-ingest.mjs",
+    "db:deploy": "prisma migrate deploy --config prisma7.config.ts",
+    "db:generate": "prisma generate --config prisma7.config.ts",
+    "test:ingest": "node --env-file-if-exists=.env scripts/test-ingestion.mjs",
+    "test:rollups": "node --env-file-if-exists=.env scripts/test-rollup-idempotency.mjs"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.3",

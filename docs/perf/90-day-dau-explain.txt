@@ -1,0 +1,16 @@
+Generated at: 2026-11-11T09:13:21.346Z
+Organization ID: b2ee2e64-9cea-4cef-abe3-2bda336e395a
+Query: 90-day DAU from daily rollups (UTC)
+
+Result  (cost=0.29..13.79 rows=60 width=12) (actual time=11.841..11.879 rows=59.00 loops=1)
+  One-Time Filter: (NULLIF(current_setting('app.tenant_id'::text, true), ''::text) = 'b2ee2e64-9cea-4cef-abe3-2bda336e395a'::text)
+  Buffers: shared hit=4
+  ->  Index Only Scan using event_daily_rollups_organization_event_bucket_idx on event_daily_rollups  (cost=0.29..13.79 rows=60 width=12) (actual time=11.835..11.862 rows=59.00 loops=1)
+        Index Cond: (("organizationId" = 'b2ee2e64-9cea-4cef-abe3-2bda336e395a'::text) AND ("eventName" = '__all__'::text) AND ("bucketStart" >= ((CURRENT_DATE - '89 days'::interval))::date) AND ("bucketStart" < ((CURRENT_DATE + '1 day'::interval))::date))
+        Heap Fetches: 0
+        Index Searches: 1
+        Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=144
+Planning Time: 5.241 ms
+Execution Time: 11.950 ms

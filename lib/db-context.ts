@@ -1,4 +1,4 @@
-
+﻿
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/lib/generated/prisma/client";
 
@@ -65,11 +65,17 @@ export async function withIngestionTenantContext<T>(
     throw new Error("Ingestion tenant context is required");
   }
 
-  return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`
-      SELECT set_config('app.tenant_id', ${organizationId}, true)
-    `;
+  return prisma.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`
+        SELECT set_config('app.tenant_id', ${organizationId}, true)
+      `;
 
-    return callback(tx);
-  });
+      return callback(tx);
+    },
+    {
+      maxWait: 10_000,
+      timeout: 30_000,
+    },
+  );
 }

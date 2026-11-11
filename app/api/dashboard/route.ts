@@ -1,4 +1,4 @@
-
+﻿
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import {
@@ -32,12 +32,12 @@ function parseDateOnly(value: string): Date {
   const year = parts[0] ?? 0;
   const month = parts[1] ?? 1;
   const day = parts[2] ?? 1;
-  return new Date(year, month - 1, day, 0, 0, 0, 0);
+  return new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
 }
 
 function addDays(date: Date, days: number): Date {
   const result = new Date(date);
-  result.setDate(result.getDate() + days);
+  result.setUTCDate(result.getUTCDate() + days);
   return result;
 }
 
@@ -412,6 +412,23 @@ export const GET = auth(async function GET(request) {
             : {}),
         };
 
+        // Use precomputed tenant rollups only for exact UTC-day windows.
+        // The rollup already deduplicates users across every project.
+        const isWholeUtcDayRange = [startDate, endDateExclusive].every(
+          (date) =>
+            date.getUTCHours() === 0 &&
+            date.getUTCMinutes() === 0 &&
+            date.getUTCSeconds() === 0 &&
+            date.getUTCMilliseconds() === 0,
+        );
+        const useDailyRollups =
+          !eventName &&
+          !userId &&
+          requestedProjectId === "All" &&
+          isWholeUtcDayRange &&
+          endDateExclusive.getTime() - startDate.getTime() <=
+            91 * 24 * 60 * 60 * 1000;
+
         // Daily chart SQL filters
         const eventNameSql = eventName
           ? Prisma.sql`AND "eventName" ILIKE ${`%${eventName}%`}`
@@ -493,46 +510,59 @@ export const GET = auth(async function GET(request) {
             },
           }),
 
-          // Daily event volume using PostgreSQL aggregation
-          tx.$queryRaw<
-            Array<{
-              day: Date;
-              count: bigint;
-            }>
-          >`
-            SELECT
-              DATE_TRUNC('day', "createdAt") AS day,
-              COUNT(*)::bigint AS count
-            FROM "AnalyticsEvent"
-            WHERE "projectId" IN (${Prisma.join(projectIds)})
-              AND "createdAt" >= ${startDate}
-              AND "createdAt" < ${endDateExclusive}
-              ${eventNameSql}
-              ${userIdSql}
-            GROUP BY DATE_TRUNC('day', "createdAt")
-            ORDER BY day ASC
-          `,
+          // Daily event volume: use the rollup read path when its scope is exact.
+          useDailyRollups
+            ? tx.$queryRaw<Array<{ day: Date; count: bigint }>>`
+                SELECT "bucketStart"::timestamp AS day,
+                       SUM("eventCount")::bigint AS count
+                FROM event_daily_rollups
+                WHERE "organizationId" = ${membership.organizationId}
+                  AND "eventName" = '__all__'
+                  AND "bucketStart" >= ${startDate}::date
+                  AND "bucketStart" < ${endDateExclusive}::date
+                GROUP BY "bucketStart"
+                ORDER BY day ASC
+              `
+            : tx.$queryRaw<Array<{ day: Date; count: bigint }>>`
+                SELECT
+                  DATE_TRUNC('day', "createdAt") AS day,
+                  COUNT(*)::bigint AS count
+                FROM "AnalyticsEvent"
+                WHERE "projectId" IN (${Prisma.join(projectIds)})
+                  AND "createdAt" >= ${startDate}
+                  AND "createdAt" < ${endDateExclusive}
+                  ${eventNameSql}
+                  ${userIdSql}
+                GROUP BY DATE_TRUNC('day', "createdAt")
+                ORDER BY day ASC
+              `,
 
-          // Daily distinct identified users using PostgreSQL aggregation
-          tx.$queryRaw<
-            Array<{
-              day: Date;
-              count: bigint;
-            }>
-          >`
-            SELECT
-              DATE_TRUNC('day', "createdAt") AS day,
-              COUNT(DISTINCT "userId")::bigint AS count
-            FROM "AnalyticsEvent"
-            WHERE "projectId" IN (${Prisma.join(projectIds)})
-              AND "createdAt" >= ${startDate}
-              AND "createdAt" < ${endDateExclusive}
-              AND "userId" IS NOT NULL
-              ${eventNameSql}
-              ${userIdSql}
-            GROUP BY DATE_TRUNC('day', "createdAt")
-            ORDER BY day ASC
-          `,
+          // Daily active users: the __all__ row preserves per-day distinctness.
+          useDailyRollups
+            ? tx.$queryRaw<Array<{ day: Date; count: bigint }>>`
+                SELECT "bucketStart"::timestamp AS day,
+                       "uniqueUsers" AS count
+                FROM event_daily_rollups
+                WHERE "organizationId" = ${membership.organizationId}
+                  AND "eventName" = '__all__'
+                  AND "bucketStart" >= ${startDate}::date
+                  AND "bucketStart" < ${endDateExclusive}::date
+                ORDER BY day ASC
+              `
+            : tx.$queryRaw<Array<{ day: Date; count: bigint }>>`
+                SELECT
+                  DATE_TRUNC('day', "createdAt") AS day,
+                  COUNT(DISTINCT "userId")::bigint AS count
+                FROM "AnalyticsEvent"
+                WHERE "projectId" IN (${Prisma.join(projectIds)})
+                  AND "createdAt" >= ${startDate}
+                  AND "createdAt" < ${endDateExclusive}
+                  AND "userId" IS NOT NULL
+                  ${eventNameSql}
+                  ${userIdSql}
+                GROUP BY DATE_TRUNC('day', "createdAt")
+                ORDER BY day ASC
+              `,
         ]);
 
         const activeUsersCount = activeUsers.length;

@@ -1,11 +1,13 @@
 import { prismaOps } from "@/lib/prisma-ops"
 import { hashLegacyApiKey, verifyApiKey } from "@/lib/api-keys"
 
+import { hashIngestionPayload } from "@/lib/ingestion/idempotency"
+
 import { withIngestionTenantContext } from "@/lib/db-context"
 
 import { checkRateLimit } from "@/lib/rate-limit"
 
-import { createHash, randomUUID } from "crypto"
+import { randomUUID } from "crypto"
 
 import { NextResponse } from "next/server"
 
@@ -113,7 +115,7 @@ async function logIngestionError({
 }
 
 const eventSchema = z.object({
-  eventName: z.string().trim().min(1).max(100),
+  eventName: z.string().trim().min(1).max(100).refine((value) => value !== "__all__", "This event name is reserved"),
 
   userId: z.string().nullable().optional(),
 
@@ -156,13 +158,6 @@ function getNextMonthStartUTC(periodStart: Date): Date {
   )
 }
 
-function hashPayload(payload: unknown): string {
-  return createHash("sha256")
-    .update(JSON.stringify(payload))
-
-    .digest("hex")
-}
-
 function getRateLimitHeaders(rateLimit: {
   limit: number
 
@@ -191,6 +186,8 @@ export async function POST(request: Request) {
   let idempotencyKey: string | null = null
 
   try {
+    let rateLimitHeaders: Record<string, string> = {}
+
     // 1. Read API key from Authorization header or sendBeacon query.
 
     const url = new URL(request.url)
@@ -219,47 +216,21 @@ export async function POST(request: Request) {
       )
     }
 
+    const contentLength = Number(request.headers.get("content-length") ?? 0)
+    if (Number.isFinite(contentLength) && contentLength > 1_048_576) {
+      return NextResponse.json(
+        { error: "Payload exceeds the 1 MB limit" },
+        { status: 413 },
+      )
+    }
+
     // 2. Hash API key to match the stored hash.
 
     // Stable fingerprint is used for rate limiting and legacy-key lookup.
     // Dedicated API keys are verified against salted scrypt hashes below.
     apiKeyHash = hashLegacyApiKey(apiKey)
 
-    // 3. Rate limit.
-
-    const rateLimit = checkRateLimit({
-      key: `ingest:${apiKeyHash}`,
-
-      limit: 120,
-
-      windowMs: 60000,
-    })
-
-    const rateLimitHeaders = getRateLimitHeaders(rateLimit)
-
-    if (!rateLimit.success) {
-      return NextResponse.json(
-        { error: "Rate limit exceeded. Please slow down." },
-
-        {
-          status: 429,
-
-          headers: {
-            ...rateLimitHeaders,
-
-            "Retry-After": String(
-              Math.max(
-                1,
-
-                rateLimit.reset - Math.floor(Date.now() / 1000),
-              ),
-            ),
-          },
-        },
-      )
-    }
-
-    // 4. Resolve project and organization using the dedicated read-only operations client.
+    // 3. Resolve project and organization using the dedicated read-only operations client.
     let project: {
       id: string;
       organizationId: string;
@@ -475,7 +446,41 @@ export async function POST(request: Request) {
       )
     }
 
-    // 7. Idempotency-Key is optional.
+    // 7. Consume one shared PostgreSQL token per accepted event.
+    // This is organization-scoped and consistent across application instances.
+    const rateLimit = await checkRateLimit({
+      organizationId,
+      key: `ingest:${apiKeyHash}`,
+      requestedTokens: events.length,
+    })
+    rateLimitHeaders = getRateLimitHeaders(rateLimit)
+
+    if (!rateLimit.success) {
+      await logIngestionError({
+        errorCode: "rate_limit_exceeded",
+        statusCode: 429,
+        projectId,
+        organizationId,
+        apiKeyHash,
+      })
+
+      return NextResponse.json(
+        {
+          error: "rate_limit_exceeded",
+          message: "Event ingestion rate limit exceeded.",
+          retryAfterSeconds: rateLimit.retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: {
+            ...rateLimitHeaders,
+            "Retry-After": String(Math.max(1, rateLimit.retryAfterSeconds)),
+          },
+        },
+      )
+    }
+
+    // 8. Idempotency-Key is optional.
 
     idempotencyKey = request.headers.get("idempotency-key")?.trim() || null
 
@@ -493,9 +498,9 @@ export async function POST(request: Request) {
       )
     }
 
-    incomingPayloadHash = hashPayload(events)
+    incomingPayloadHash = hashIngestionPayload(events)
 
-    // 8. Prepare monthly quota period.
+    // 9. Prepare monthly quota period.
 
     const periodStart = getCurrentMonthStartUTC()
 
@@ -503,7 +508,7 @@ export async function POST(request: Request) {
 
     const quota = project.organization.eventQuota
 
-    // 9. Atomically reserve idempotency, quota and insert events.
+    // 10. Atomically reserve idempotency, quota and insert events.
 
     const result = await withIngestionTenantContext(
       organizationId,
@@ -707,7 +712,7 @@ export async function POST(request: Request) {
       },
     )
 
-    // 10. Return quota exceeded response.
+    // 11. Return quota exceeded response.
 
     if (result.quotaExceeded) {
       await logIngestionError({
@@ -755,7 +760,7 @@ export async function POST(request: Request) {
       )
     }
 
-    // 11. Return accepted response.
+    // 12. Return accepted response.
 
     return NextResponse.json(result.responseBody, {
       status: 202,
@@ -773,7 +778,7 @@ export async function POST(request: Request) {
       },
     })
   } catch (error) {
-    // 12. Handle duplicate idempotency key.
+    // 13. Handle duplicate idempotency key.
 
     if (
       error instanceof Error &&
