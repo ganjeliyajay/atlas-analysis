@@ -1,36 +1,23 @@
-
-import { Suspense } from "react";
-import { connection } from "next/server";
-
-import DashboardAuth from "./DashboardAuth";
+import { auth } from "@/auth";
+import { redirect } from "next/navigation";
 import DashboardClientLayout from "./DashboardClientLayout";
 
 type DashboardLayoutProps = {
   children: React.ReactNode;
 };
 
-export default function DashboardLayout({
+export default async function DashboardLayout({
   children,
 }: DashboardLayoutProps) {
-  return (
-    <Suspense fallback={<div>Loading dashboard...</div>}>
-      <DashboardContent>
-        {children}
-      </DashboardContent>
-    </Suspense>
-  );
-}
+  const session = await auth();
 
-async function DashboardContent({
-  children,
-}: DashboardLayoutProps) {
-  await connection();
+  if (!session?.user) {
+    redirect("/login");
+  }
 
   return (
-    <DashboardAuth>
-      <DashboardClientLayout>
-        {children}
-      </DashboardClientLayout>
-    </DashboardAuth>
+    <DashboardClientLayout>
+      {children}
+    </DashboardClientLayout>
   );
 }

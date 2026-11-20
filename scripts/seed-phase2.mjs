@@ -1,13 +1,12 @@
 import pg from "pg";
+import { assertDedicatedTestDatabase } from "./test-safety.mjs";
 
 const { Pool } = pg;
 const targetEvents = Number.parseInt(process.env.SEED_EVENT_COUNT ?? "5000000", 10);
 const connectionString =
   process.env.DATABASE_URL_MIGRATION ?? process.env.DATABASE_URL;
 
-if (!connectionString) {
-  throw new Error("Set DATABASE_URL_MIGRATION (migration/admin database role).");
-}
+assertDedicatedTestDatabase(connectionString, "DATABASE_URL_MIGRATION");
 if (!Number.isSafeInteger(targetEvents) || targetEvents < 5_000_000) {
   throw new Error("SEED_EVENT_COUNT must be an integer of at least 5,000,000.");
 }

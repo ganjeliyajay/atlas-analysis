@@ -1,4 +1,4 @@
-﻿
+
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@/lib/generated/prisma/client";
 
@@ -12,13 +12,19 @@ export async function withUserContext<T>(
     throw new Error("User context is required");
   }
 
-  return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`
-      SELECT set_config('app.user_id', ${userId}, true)
-    `;
+  return prisma.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`
+        SELECT set_config('app.user_id', ${userId}, true)
+      `;
 
-    return callback(tx);
-  });
+      return callback(tx);
+    },
+    {
+      maxWait: 10_000,
+      timeout: 30_000,
+    },
+  );
 }
 
 export async function withTenantContext<T>(
@@ -30,31 +36,37 @@ export async function withTenantContext<T>(
     throw new Error("User and organization context are required");
   }
 
-  return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`
-      SELECT set_config('app.user_id', ${userId}, true)
-    `;
+  return prisma.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`
+        SELECT set_config('app.user_id', ${userId}, true)
+      `;
 
-    const membership = await tx.organizationMember.findFirst({
-      where: {
-        userId,
-        organizationId,
-      },
-      select: {
-        id: true,
-      },
-    });
+      const membership = await tx.organizationMember.findFirst({
+        where: {
+          userId,
+          organizationId,
+        },
+        select: {
+          id: true,
+        },
+      });
 
-    if (!membership) {
-      throw new Error("Organization access denied");
-    }
+      if (!membership) {
+        throw new Error("Organization access denied");
+      }
 
-    await tx.$queryRaw`
-      SELECT set_config('app.tenant_id', ${organizationId}, true)
-    `;
+      await tx.$queryRaw`
+        SELECT set_config('app.tenant_id', ${organizationId}, true)
+      `;
 
-    return callback(tx);
-  });
+      return callback(tx);
+    },
+    {
+      maxWait: 10_000,
+      timeout: 30_000,
+    },
+  );
 }
 
 export async function withIngestionTenantContext<T>(

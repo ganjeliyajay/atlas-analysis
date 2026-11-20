@@ -33,9 +33,9 @@ type RetentionApiResponse = {
   success: boolean;
   data: {
     kpis: {
-      day1Retention: number;
-      week1Retention: number;
-      week4Retention: number;
+      period1Retention: number;
+      period2Retention: number;
+      period4Retention: number;
       averageCohortSize: number;
     };
     retentionCurve: {
@@ -73,9 +73,9 @@ export default function RetentionPage() {
   >([]);
 
   const [kpis, setKpis] = useState({
-    day1Retention: 0,
-    week1Retention: 0,
-    week4Retention: 0,
+    period1Retention: 0,
+    period2Retention: 0,
+    period4Retention: 0,
     averageCohortSize: 0,
   });
 
@@ -329,13 +329,13 @@ export default function RetentionPage() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {/* Day 1 */}
+        {/* Period 1 */}
         <Card className="relative overflow-hidden p-4">
           <div className="absolute right-0 top-0 h-20 w-20 rounded-full bg-indigo-500/5 blur-2xl" />
 
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-400">
-              Day 1 Retention
+              {cohortPeriod === 'daily' ? 'Day 1 Retention' : cohortPeriod === 'weekly' ? 'Week 1 Retention' : 'Month 1 Retention'}
             </span>
 
             <div className="rounded-lg bg-indigo-500/10 p-2">
@@ -344,7 +344,7 @@ export default function RetentionPage() {
           </div>
 
           <div className="mt-3 text-2xl font-bold tracking-tight text-white">
-            {loading ? '...' : `${kpis.day1Retention}%`}
+            {loading ? '...' : `${kpis.period1Retention}%`}
           </div>
 
           <p className="mt-2 text-[11px] text-slate-500">
@@ -352,13 +352,13 @@ export default function RetentionPage() {
           </p>
         </Card>
 
-        {/* Week 1 */}
+        {/* Period 2 */}
         <Card className="relative overflow-hidden p-4">
           <div className="absolute right-0 top-0 h-20 w-20 rounded-full bg-emerald-500/5 blur-2xl" />
 
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-400">
-              Week 1 Retention
+              {cohortPeriod === 'daily' ? 'Day 2 Retention' : cohortPeriod === 'weekly' ? 'Week 2 Retention' : 'Month 2 Retention'}
             </span>
 
             <div className="rounded-lg bg-emerald-500/10 p-2">
@@ -367,21 +367,21 @@ export default function RetentionPage() {
           </div>
 
           <div className="mt-3 text-2xl font-bold tracking-tight text-white">
-            {loading ? '...' : `${kpis.week1Retention}%`}
+            {loading ? '...' : `${kpis.period2Retention}%`}
           </div>
 
           <p className="mt-2 text-[11px] text-slate-500">
-            Users returning during period 1
+            Users returning during period 2
           </p>
         </Card>
 
-        {/* Week 4 */}
+        {/* Period 4 */}
         <Card className="relative overflow-hidden p-4">
           <div className="absolute right-0 top-0 h-20 w-20 rounded-full bg-violet-500/5 blur-2xl" />
 
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-400">
-              Week 4 Retention
+              {cohortPeriod === 'daily' ? 'Day 4 Retention' : cohortPeriod === 'weekly' ? 'Week 4 Retention' : 'Month 4 Retention'}
             </span>
 
             <div className="rounded-lg bg-violet-500/10 p-2">
@@ -390,7 +390,7 @@ export default function RetentionPage() {
           </div>
 
           <div className="mt-3 text-2xl font-bold tracking-tight text-white">
-            {loading ? '...' : `${kpis.week4Retention}%`}
+            {loading ? '...' : `${kpis.period4Retention}%`}
           </div>
 
           <p className="mt-2 text-[11px] text-slate-500">

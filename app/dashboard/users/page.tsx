@@ -652,7 +652,7 @@ export default function UsersPage() {
 
     };
 
-  }, [selectedUser?.id, projectId, journeySessionId, journeyPage]);
+  }, [selectedUser, projectId, journeySessionId, journeyPage]);
 
   // Convert daily users into chart data
 

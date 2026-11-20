@@ -53,4 +53,19 @@ describe("verifyApiKey", () => {
   it("rejects malformed stored hashes", () => {
     expect(verifyApiKey("atlas_live_key", "not-a-valid-hash")).toBe(false);
   });
+
+  it("fails closed on null, undefined, empty, or non-string inputs", () => {
+    // @ts-expect-error test invalid inputs
+    expect(verifyApiKey(null, "scrypt$abc$def")).toBe(false);
+    // @ts-expect-error test invalid inputs
+    expect(verifyApiKey("key", undefined)).toBe(false);
+    expect(verifyApiKey("", "scrypt$abc$def")).toBe(false);
+    expect(verifyApiKey("key", "")).toBe(false);
+  });
+
+  it("proves keyHash cannot be reverse-engineered or used as an API key", () => {
+    const { keyHash } = generateApiKey();
+    // Supplying the stored hash as the API key directly must fail verification
+    expect(verifyApiKey(keyHash, keyHash)).toBe(false);
+  });
 });

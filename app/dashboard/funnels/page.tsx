@@ -361,6 +361,8 @@ export default function FunnelAnalyticsPage() {
       }
 
       params.set("range", range);
+      params.set("startDate", dateRange.startDate);
+      params.set("endDate", dateRange.endDate);
 
       params.set(
         "conversionWindowDays",
@@ -505,7 +507,7 @@ export default function FunnelAnalyticsPage() {
       ];
 
       const response = await fetch(
-        "/api/analytics/funnels/compare",
+        "/api/analytics/funnels",
         {
           method: "POST",
           headers: {
@@ -518,6 +520,8 @@ export default function FunnelAnalyticsPage() {
               conversionWindowDays
             ),
             projectId,
+            startDate: dateRange.startDate,
+            endDate: dateRange.endDate,
             funnels,
           }),
         }

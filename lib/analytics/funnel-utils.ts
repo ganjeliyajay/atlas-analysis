@@ -4,6 +4,29 @@ export type FunnelStep = {
   value: string;
 };
 
+export type FunnelValidationResult = {
+  valid: boolean;
+  error?: string;
+};
+
+export function validateFunnelSteps(steps: FunnelStep[]): FunnelValidationResult {
+  if (steps.length < 2 || steps.length > 6) {
+    return { valid: false, error: "A funnel must contain between 2 and 6 ordered steps." };
+  }
+
+  const values = steps.map((step) => step.value.trim());
+  if (values.some((value) => value.length === 0 || value.length > 200)) {
+    return { valid: false, error: "Every funnel step must have a value between 1 and 200 characters." };
+  }
+  if (new Set(values).size !== values.length) {
+    return { valid: false, error: "Funnel steps must be unique." };
+  }
+  if (steps.some((step) => step.type !== "event" && step.type !== "page")) {
+    return { valid: false, error: "Funnel step type must be event or page." };
+  }
+  return { valid: true };
+}
+
 export type FunnelEvent = {
   userId: string | null;
   sessionId: string | null;
@@ -28,11 +51,12 @@ export function matchesStep(
   event: FunnelEvent,
   step: FunnelStep
 ): boolean {
+  const expectedValue = step.value.trim();
   if (step.type === "event") {
-    return event.eventName === step.value;
+    return event.eventName === expectedValue;
   }
 
-  return event.pageUrl === step.value;
+  return event.pageUrl === expectedValue;
 }
 
 export function calculateFunnel(
@@ -40,6 +64,14 @@ export function calculateFunnel(
   steps: FunnelStep[],
   conversionWindowDays: number
 ) {
+  const validation = validateFunnelSteps(steps);
+  if (!validation.valid) {
+    throw new Error(validation.error || "Invalid funnel configuration.");
+  }
+  if (![1, 7, 30].includes(conversionWindowDays)) {
+    throw new Error("Conversion window must be 1, 7, or 30 days.");
+  }
+
   const userEvents = new Map<string, FunnelEvent[]>();
 
   // Group events by identified user

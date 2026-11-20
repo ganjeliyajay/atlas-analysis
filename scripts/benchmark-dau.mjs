@@ -1,4 +1,5 @@
 import pg from "pg";
+import { assertDedicatedTestDatabase } from "./test-safety.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -6,9 +7,7 @@ const { Pool } = pg;
 const connectionString = process.env.DATABASE_URL_APP;
 const organizationId = process.argv[2];
 
-if (!connectionString) {
-  throw new Error("Set DATABASE_URL_APP.");
-}
+assertDedicatedTestDatabase(connectionString, "DATABASE_URL_APP");
 if (!organizationId) {
   throw new Error("Usage: npm run benchmark:dau -- <organization-id>");
 }

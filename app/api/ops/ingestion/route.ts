@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prismaOps } from "@/lib/prisma-ops";
 import { Prisma } from "@/lib/generated/prisma/client";
+import { formatUtcNaiveTimestamp } from "@/lib/analytics/date-utils";
 
 export const GET = auth(async function GET(request) {
   try {
@@ -97,10 +98,10 @@ export const GET = auth(async function GET(request) {
 
       // Events per hour over the last 24 hours.
       prismaOps.$queryRaw<
-        { hour: Date; count: bigint }[]
+        { hour: string; count: bigint }[]
       >(Prisma.sql`
         SELECT
-          date_trunc('hour', "createdAt") AS hour,
+          TO_CHAR(date_trunc('hour', "createdAt"), 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS hour,
           COUNT(*)::bigint AS count
         FROM "AnalyticsEvent"
         WHERE "createdAt" >= ${twentyFourHoursAgo}
@@ -150,20 +151,20 @@ export const GET = auth(async function GET(request) {
         eventsLast5Minutes,
         eventsLast24Hours,
         latestEventAt:
-          latestEvent?.createdAt.toISOString() ?? null,
+          latestEvent ? formatUtcNaiveTimestamp(latestEvent.createdAt) : null,
       },
 
       latestEvent: latestEvent
         ? {
             id: latestEvent.id,
             eventName: latestEvent.eventName,
-            createdAt: latestEvent.createdAt.toISOString(),
+            createdAt: formatUtcNaiveTimestamp(latestEvent.createdAt),
             project: latestEvent.project,
           }
         : null,
 
       hourlyTrend: hourlyTrend.map((item) => ({
-        hour: item.hour.toISOString(),
+        hour: item.hour,
         count: Number(item.count),
       })),
 

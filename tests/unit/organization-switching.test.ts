@@ -63,7 +63,8 @@ const mockTx: MockTx = {
   },
 };
 
-import { getActiveOrganization } from '@/lib/organization';
+import { cookies } from 'next/headers';
+import { getActiveOrganization, getActiveOrganizationForUser } from '@/lib/organization';
 
 describe('getActiveOrganization', () => {
   beforeEach(() => {
@@ -125,6 +126,39 @@ describe('getActiveOrganization', () => {
       slug: 'default-org',
       role: 'owner',
     });
+  });
+
+
+  it('resolves the selected organization from the cookie and validates it through membership', async () => {
+    const preferredMembership: MockMembership = {
+      role: 'admin',
+      organization: {
+        id: 'org-selected',
+        name: 'Selected Org',
+        slug: 'selected-org',
+      },
+    };
+    const cookieGet = vi.fn().mockReturnValue({ value: 'org-selected' });
+    vi.mocked(cookies).mockResolvedValue({ get: cookieGet } as never);
+    mockTx.organizationMember.findUnique.mockResolvedValue(preferredMembership);
+
+    const result = await getActiveOrganizationForUser('user-1');
+
+    expect(cookieGet).toHaveBeenCalledWith('atlas_active_org_id');
+    expect(result).toEqual({
+      id: 'org-selected',
+      organizationId: 'org-selected',
+      name: 'Selected Org',
+      slug: 'selected-org',
+      role: 'admin',
+    });
+  });
+
+  it('returns null for a blank user ID without querying the database', async () => {
+    const result = await getActiveOrganizationForUser('   ');
+    expect(result).toBeNull();
+    expect(mockTx.organizationMember.findUnique).not.toHaveBeenCalled();
+    expect(mockTx.organizationMember.findFirst).not.toHaveBeenCalled();
   });
 
   it('returns null when the user has no memberships at all', async () => {

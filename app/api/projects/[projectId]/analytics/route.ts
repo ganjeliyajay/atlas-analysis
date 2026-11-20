@@ -1,55 +1,42 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import {
-  withTenantContext,
-  withUserContext,
-} from "@/lib/db-context";
+import { getActiveOrganizationForUser } from "@/lib/organization";
+import { formatUtcNaiveTimestamp, normalizeUtcNaiveTimestamp } from "@/lib/analytics/date-utils";
+import { withTenantContext } from "@/lib/db-context";
 import { Prisma } from "@/lib/generated/prisma/client";
+import { z } from "zod";
+
+const projectAnalyticsQuerySchema = z.object({
+  range: z.enum(["today", "7d", "30d", "90d"]).default("30d"),
+  eventName: z.string().max(200).optional().nullable(),
+  userId: z.string().max(255).optional().nullable(),
+});
 
 type Range = "today" | "7d" | "30d" | "90d";
 
-function getRangeStart(range: Range) {
-  const now = new Date();
-  const start = new Date(now);
+function getRangeStart(range: Range, now: Date): Date {
+  const start = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+  ));
 
   switch (range) {
     case "today":
-      start.setHours(start.getHours() - 24);
       break;
     case "7d":
-      start.setDate(start.getDate() - 7);
+      start.setUTCDate(start.getUTCDate() - 6);
       break;
     case "30d":
-      start.setDate(start.getDate() - 30);
+      start.setUTCDate(start.getUTCDate() - 29);
       break;
     case "90d":
-      start.setDate(start.getDate() - 90);
+      start.setUTCDate(start.getUTCDate() - 89);
       break;
   }
 
   return start;
-}
-
-function getPreviousRangeStart(startDate: Date, range: Range) {
-  const previousStart = new Date(startDate);
-
-  switch (range) {
-    case "today":
-      previousStart.setHours(previousStart.getHours() - 24);
-      break;
-    case "7d":
-      previousStart.setDate(previousStart.getDate() - 7);
-      break;
-    case "30d":
-      previousStart.setDate(previousStart.getDate() - 30);
-      break;
-    case "90d":
-      previousStart.setDate(previousStart.getDate() - 90);
-      break;
-  }
-
-  return previousStart;
 }
 
 function getPercentageChange(current: number, previous: number) {
@@ -106,58 +93,35 @@ export const GET = auth(async function GET(
     const authUserId = session.user.id;
 
     // 2. Get project ID
-    const { projectId } = await context.params;
-
-    if (!projectId) {
+    const { projectId: rawProjectId } = await context.params;
+    const projectIdResult = z.string().trim().min(1, "Project ID is required").max(100).safeParse(rawProjectId);
+    if (!projectIdResult.success) {
       return NextResponse.json(
-        { error: "Project ID is required" },
+        { error: projectIdResult.error.issues[0]?.message || "Invalid Project ID" },
+        { status: 400 }
+      );
+    }
+    const projectId = projectIdResult.data;
+
+    // 3. Read query parameters
+    const { searchParams } = new URL(request.url);
+    const rawQuery: Record<string, string> = {};
+    searchParams.forEach((val, key) => {
+      rawQuery[key] = val;
+    });
+
+    const parsedQuery = projectAnalyticsQuerySchema.safeParse(rawQuery);
+    if (!parsedQuery.success) {
+      return NextResponse.json(
+        { error: parsedQuery.error.issues[0]?.message || "Invalid query parameters" },
         { status: 400 }
       );
     }
 
-    // 3. Read query parameters
-    const { searchParams } = new URL(request.url);
-
-    const rangeParam = searchParams.get("range");
-
-    const allowedRanges: Range[] = [
-      "today",
-      "7d",
-      "30d",
-      "90d",
-    ];
-
-    const range: Range = allowedRanges.includes(
-      rangeParam as Range
-    )
-      ? (rangeParam as Range)
-      : "30d";
-
-    // Analytics filters
-    const eventNameFilter =
-      searchParams.get("eventName")?.trim().slice(0, 200) ||
-      null;
-
-    const userIdFilter =
-      searchParams.get("userId")?.trim().slice(0, 200) ||
-      null;
+    const { range, eventName: eventNameFilter, userId: userIdFilter } = parsedQuery.data;
 
     // 4. Find user's organization membership
-    const membership = await withUserContext(
-      authUserId,
-      (tx) =>
-        tx.organizationMember.findFirst({
-          where: {
-            userId: authUserId,
-          },
-          orderBy: {
-            createdAt: "asc",
-          },
-          select: {
-            organizationId: true,
-          },
-        })
-    );
+    const membership = await getActiveOrganizationForUser(authUserId);
 
     if (!membership) {
       return NextResponse.json(
@@ -192,12 +156,10 @@ export const GET = auth(async function GET(
           };
         }
 
-        const startDate = getRangeStart(range);
-
-        const previousStartDate = getPreviousRangeStart(
-          startDate,
-          range
-        );
+        const now = new Date();
+        const startDate = getRangeStart(range, now);
+        const currentDuration = now.getTime() - startDate.getTime();
+        const previousStartDate = new Date(startDate.getTime() - currentDuration);
 
         // Build shared filter conditions
         const sharedFilters: Prisma.AnalyticsEventWhereInput = {
@@ -214,6 +176,7 @@ export const GET = auth(async function GET(
           projectId: project.id,
           createdAt: {
             gte: startDate,
+            lt: now,
           },
           ...sharedFilters,
         };
@@ -240,6 +203,7 @@ export const GET = auth(async function GET(
         // Fetch analytics
         const [
           totalEvents,
+          identifiedEvents,
           previousTotalEvents,
           activeUsers,
           previousActiveUsers,
@@ -250,6 +214,10 @@ export const GET = auth(async function GET(
           // Total events in selected period
           tx.analyticsEvent.count({
             where: currentWhere,
+          }),
+
+          tx.analyticsEvent.count({
+            where: { ...currentWhere, userId: { not: null } },
           }),
 
           // Total events in previous period
@@ -306,16 +274,17 @@ export const GET = auth(async function GET(
           // Daily event volume
           tx.$queryRaw<
             Array<{
-              day: Date;
+              day: string;
               count: bigint;
             }>
           >(Prisma.sql`
             SELECT
-              DATE_TRUNC('day', "createdAt") AS day,
+              TO_CHAR(DATE_TRUNC('day', "createdAt"), 'YYYY-MM-DD') AS day,
               COUNT(*)::bigint AS count
             FROM "AnalyticsEvent"
             WHERE "projectId" = ${project.id}
               AND "createdAt" >= ${startDate}
+              AND "createdAt" < ${now}
               ${eventNameCondition}
               ${userIdCondition}
             GROUP BY DATE_TRUNC('day', "createdAt")
@@ -332,7 +301,7 @@ export const GET = auth(async function GET(
         const eventsPerUser =
           activeUsersCount > 0
             ? Number(
-                (totalEvents / activeUsersCount).toFixed(2)
+                (identifiedEvents / activeUsersCount).toFixed(2)
               )
             : 0;
 
@@ -377,7 +346,7 @@ export const GET = auth(async function GET(
         // Format events over time
         const eventsOverTime = dailyEventCounts.map(
           (item) => ({
-            date: item.day.toISOString().slice(0, 10),
+            date: item.day,
             eventVolume: Number(item.count),
           })
         );
@@ -388,8 +357,8 @@ export const GET = auth(async function GET(
             id: event.id,
             name: event.eventName,
             userId: event.userId,
-            timestamp: event.createdAt.toISOString(),
-            relativeTime: getRelativeTime(event.createdAt),
+            timestamp: formatUtcNaiveTimestamp(event.createdAt),
+            relativeTime: getRelativeTime(normalizeUtcNaiveTimestamp(event.createdAt)),
           })
         );
 

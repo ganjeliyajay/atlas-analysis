@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   calculateFunnel,
+  validateFunnelSteps,
   type FunnelEvent,
   type FunnelStep,
 } from "./funnel-utils";
@@ -207,5 +208,60 @@ describe("Funnel Analytics", () => {
 
     expect(getStep(result, 0).users).toBe(1);
     expect(getStep(result, 1).users).toBe(1);
+  });
+});
+
+
+describe("Funnel configuration validation", () => {
+  it("accepts a funnel with two ordered steps", () => {
+    expect(validateFunnelSteps(steps.slice(0, 2)).valid).toBe(true);
+  });
+
+  it("accepts up to six unique steps", () => {
+    const sixSteps: FunnelStep[] = [
+      ...steps,
+      { name: "Add to cart", type: "event", value: "add_to_cart" },
+      { name: "Checkout", type: "event", value: "checkout" },
+      { name: "Purchase", type: "event", value: "purchase" },
+    ];
+    expect(validateFunnelSteps(sixSteps).valid).toBe(true);
+  });
+
+  it("rejects fewer than two steps", () => {
+    expect(validateFunnelSteps(steps.slice(0, 1)).valid).toBe(false);
+  });
+
+  it("rejects more than six steps", () => {
+    const sevenSteps = [
+      ...steps,
+      { name: "Add to cart", type: "event" as const, value: "add_to_cart" },
+      { name: "Checkout", type: "event" as const, value: "checkout" },
+      { name: "Purchase", type: "event" as const, value: "purchase" },
+      { name: "Subscribe", type: "event" as const, value: "subscribe" },
+    ];
+    expect(validateFunnelSteps(sevenSteps).valid).toBe(false);
+  });
+
+  it("rejects duplicate step values", () => {
+    expect(validateFunnelSteps([
+      steps[0]!,
+      { ...steps[1]!, value: steps[0]!.value },
+    ]).valid).toBe(false);
+  });
+
+  it("rejects an empty step value", () => {
+    expect(validateFunnelSteps([
+      steps[0]!,
+      { ...steps[1]!, value: " " },
+    ]).valid).toBe(false);
+  });
+
+  it("rejects unsupported conversion windows", () => {
+    expect(() => calculateFunnel([], steps.slice(0, 2), 0)).toThrow(
+      "Conversion window must be 1, 7, or 30 days.",
+    );
+    expect(() => calculateFunnel([], steps.slice(0, 2), 14)).toThrow(
+      "Conversion window must be 1, 7, or 30 days.",
+    );
   });
 });

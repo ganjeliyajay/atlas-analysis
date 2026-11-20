@@ -5,6 +5,7 @@ import { auth } from "@/auth";
 import { getCurrentOrganization } from "@/lib/organization";
 import { withTenantContext } from "@/lib/db-context";
 import { requireOrgPermission } from "@/lib/permissions";
+import { createAuditLog } from "@/lib/audit";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -96,6 +97,17 @@ export const POST = auth(async function POST(req, context) {
           },
           data: {
             revokedAt,
+          },
+        });
+
+        await createAuditLog(tx, {
+          actorId: session.user.id,
+          action: "api_key:revoke",
+          targetType: "api_key",
+          targetId: keyId,
+          details: {
+            organizationId: org.id,
+            revokedAt: revokedAt.toISOString(),
           },
         });
 

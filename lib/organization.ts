@@ -19,15 +19,29 @@ export async function getCurrentOrganization(): Promise<OrganizationContext | nu
     redirect("/login");
   }
 
+  return getActiveOrganizationForUser(session.user.id);
+}
+
+/**
+ * Resolve the authenticated user's currently selected organization.
+ * The cookie is only a preference: getActiveOrganization validates it
+ * against a real OrganizationMember row before returning the organization.
+ */
+export async function getActiveOrganizationForUser(
+  userId: string,
+): Promise<(OrganizationContext & { organizationId: string }) | null> {
+  if (!userId.trim()) return null;
+
   let preferredOrgId: string | undefined;
   try {
     const cookieStore = await cookies();
     preferredOrgId = cookieStore.get(ACTIVE_ORG_COOKIE_NAME)?.value;
   } catch {
-    // In contexts where cookies() is not available (e.g. non-request scopes)
+    // Non-request contexts fall back to the user's first organization.
   }
 
-  return getActiveOrganization(session.user.id, preferredOrgId);
+  const organization = await getActiveOrganization(userId, preferredOrgId);
+  return organization ? { ...organization, organizationId: organization.id } : null;
 }
 
 export async function getActiveOrganization(

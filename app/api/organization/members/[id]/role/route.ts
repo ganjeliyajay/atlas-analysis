@@ -11,6 +11,7 @@ import {
   hasPermission,
   isOrgRole,
 } from "@/lib/permissions";
+import { createAuditLog } from "@/lib/audit";
 
 const updateRoleSchema = z.object({
   role: z.enum(["owner", "admin", "member", "viewer"]),
@@ -296,6 +297,18 @@ export const PATCH = auth(
               FROM transfer_result
             `;
 
+            await createAuditLog(tx, {
+              actorId: actorUserId,
+              action: "org:transfer_ownership",
+              targetType: "organization",
+              targetId: org.id,
+              details: {
+                previousOwnerId: organization.ownerId,
+                newOwnerId: targetMembership.userId,
+                targetMemberId: targetMembership.id,
+              },
+            });
+
             return {
               memberId: targetMembership.id,
               userId: targetMembership.userId,
@@ -330,6 +343,19 @@ export const PATCH = auth(
               409
             );
           }
+
+          await createAuditLog(tx, {
+            actorId: actorUserId,
+            action: "member:update_role",
+            targetType: "member",
+            targetId: targetMembership.id,
+            details: {
+              organizationId: org.id,
+              targetUserId: targetMembership.userId,
+              previousRole: targetCurrentRole,
+              newRole: requestedRole,
+            },
+          });
 
           return {
             memberId: targetMembership.id,

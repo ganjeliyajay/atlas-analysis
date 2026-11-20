@@ -1,8 +1,17 @@
-
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prismaOps } from "@/lib/prisma-ops";
+import { formatUtcNaiveTimestamp } from "@/lib/analytics/date-utils";
 import { Prisma } from "@/lib/generated/prisma/client";
+import { z } from "zod";
+
+const opsQuerySchema = z.object({
+  search: z.string().max(100).default(""),
+  status: z.enum(["All", "active", "suspended", "all"]).default("All"),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(10),
+  range: z.enum(["today", "7d", "30d", "90d"]).default("30d"),
+});
 
 export const GET = auth(async function GET(request) {
   try {
@@ -17,29 +26,27 @@ export const GET = auth(async function GET(request) {
 
     if (session.user.role !== "superadmin") {
       return NextResponse.json(
-        { error: "Forbidden" },
+        { error: "Forbidden: Superadmin privileges required" },
         { status: 403 }
       );
     }
 
     const { searchParams } = new URL(request.url);
+    const rawQuery: Record<string, string> = {};
+    searchParams.forEach((val, key) => {
+      rawQuery[key] = val;
+    });
 
-    const search = (searchParams.get("search") ?? "").trim();
+    const parsedQuery = opsQuerySchema.safeParse(rawQuery);
+    if (!parsedQuery.success) {
+      return NextResponse.json(
+        { error: parsedQuery.error.issues[0]?.message || "Invalid query parameters" },
+        { status: 400 }
+      );
+    }
 
-    const page = Math.max(
-      1,
-      Number.parseInt(searchParams.get("page") ?? "1", 10) || 1
-    );
-
-    const limit = Math.min(
-      50,
-      Math.max(
-        1,
-        Number.parseInt(searchParams.get("limit") ?? "10", 10) || 10
-      )
-    );
-
-    const range = searchParams.get("range") ?? "30d";
+    const { search, status: rawStatusFilter, page, limit, range } = parsedQuery.data;
+    const statusFilter = rawStatusFilter.toLowerCase() === "all" ? "All" : rawStatusFilter.toLowerCase();
 
     const now = new Date();
     const startDate = new Date(now);
@@ -54,7 +61,10 @@ export const GET = auth(async function GET(request) {
       startDate.setDate(startDate.getDate() - 30);
     }
 
-    const organizationWhere: Prisma.OrganizationWhereInput = search
+    const currentMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+
+    const searchFilter: Prisma.OrganizationWhereInput = search
       ? {
           OR: [
             {
@@ -81,8 +91,20 @@ export const GET = auth(async function GET(request) {
         }
       : {};
 
+    const statusWhere: Prisma.OrganizationWhereInput =
+      statusFilter !== "All"
+        ? { status: statusFilter }
+        : {};
+
+    const organizationWhere: Prisma.OrganizationWhereInput = {
+      ...searchFilter,
+      ...statusWhere,
+    };
+
     const [
       totalOrganizations,
+      activeOrganizations,
+      suspendedOrganizations,
       totalUsers,
       totalProjects,
       totalEvents,
@@ -90,6 +112,14 @@ export const GET = auth(async function GET(request) {
       totalMatchingOrganizations,
     ] = await Promise.all([
       prismaOps.organization.count(),
+
+      prismaOps.organization.count({
+        where: { status: "active" },
+      }),
+
+      prismaOps.organization.count({
+        where: { status: "suspended" },
+      }),
 
       prismaOps.user.count(),
 
@@ -114,6 +144,10 @@ export const GET = auth(async function GET(request) {
           id: true,
           name: true,
           slug: true,
+          status: true,
+          eventQuota: true,
+          suspendedAt: true,
+          suspendedReason: true,
           createdAt: true,
           owner: {
             select: {
@@ -141,52 +175,54 @@ export const GET = auth(async function GET(request) {
       }),
     ]);
 
-    const organizationProjectIds = organizations.flatMap(
-      (organization) =>
-        organization.projects.map((project) => project.id)
-    );
+    const orgIds = organizations.map((org) => org.id);
 
-    const eventCountsByProject = organizationProjectIds.length
-      ? await prismaOps.analyticsEvent.groupBy({
-          by: ["projectId"],
+    // Exact calendar-month usage matching ingestion rate limit enforcement
+    const currentMonthUsages = orgIds.length
+      ? await prismaOps.organizationUsage.findMany({
           where: {
-            projectId: {
-              in: organizationProjectIds,
-            },
-            createdAt: {
-              gte: startDate,
-            },
+            organizationId: { in: orgIds },
+            periodStart: currentMonthStart,
           },
-          _count: {
-            _all: true,
+          select: {
+            organizationId: true,
+            eventCount: true,
           },
         })
       : [];
 
-    const eventCountMap = new Map(
-      eventCountsByProject.map((item) => [
-        item.projectId,
-        item._count._all,
-      ])
+    const usageMap = new Map(
+      currentMonthUsages.map((usage) => [usage.organizationId, usage.eventCount])
     );
 
     const rows = organizations.map((organization) => {
-      const eventVolume = organization.projects.reduce(
-        (total, project) =>
-          total + (eventCountMap.get(project.id) ?? 0),
-        0
-      );
+      const currentMonthUsage = Number(usageMap.get(organization.id) ?? 0);
+      const monthlyQuota = Number(organization.eventQuota);
+      const remainingEvents = Math.max(0, monthlyQuota - currentMonthUsage);
+      const usagePercentage =
+        monthlyQuota > 0
+          ? Number(((currentMonthUsage / monthlyQuota) * 100).toFixed(1))
+          : 0;
 
       return {
         id: organization.id,
         name: organization.name,
         slug: organization.slug,
+        status: organization.status ?? "active",
+        eventQuota: organization.eventQuota,
+        monthlyQuota,
+        currentMonthUsage,
+        remainingEvents,
+        usagePercentage,
+        resetDate: nextMonthStart.toISOString(),
+        suspendedAt: organization.suspendedAt ? formatUtcNaiveTimestamp(organization.suspendedAt) : null,
+        suspendedReason: organization.suspendedReason ?? null,
         ownerName: organization.owner.name,
         ownerEmail: organization.owner.email,
         projectsCount: organization._count.projects,
         membersCount: organization._count.members,
-        eventVolume,
-        createdAt: organization.createdAt.toISOString(),
+        eventVolume: currentMonthUsage,
+        createdAt: formatUtcNaiveTimestamp(organization.createdAt),
       };
     });
 
@@ -201,6 +237,8 @@ export const GET = auth(async function GET(request) {
 
       metrics: {
         totalOrganizations,
+        activeOrganizations,
+        suspendedOrganizations,
         totalUsers,
         totalProjects,
         totalEvents,

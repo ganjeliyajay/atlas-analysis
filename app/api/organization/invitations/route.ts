@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { getCurrentOrganization } from "@/lib/organization";
 import { withTenantContext } from "@/lib/db-context";
+import { formatUtcNaiveTimestamp } from "@/lib/analytics/date-utils";
 import { requireOrgPermission } from "@/lib/permissions";
 import { emailService } from "@/lib/email";
+import { createAuditLog } from "@/lib/audit";
 import crypto from "crypto";
 import { z } from "zod";
 
@@ -57,8 +59,8 @@ export const GET = auth(async function GET(req) {
       email: inv.email,
       role: inv.role,
       status: inv.status,
-      expiresAt: inv.expiresAt,
-      createdAt: inv.createdAt,
+      expiresAt: formatUtcNaiveTimestamp(inv.expiresAt),
+      createdAt: formatUtcNaiveTimestamp(inv.createdAt),
       invitedBy: inv.invitedBy,
     }));
 
@@ -171,7 +173,7 @@ export const POST = auth(async function POST(req) {
       session.user.id,
       org.id,
       async (tx) => {
-        return tx.invitation.create({
+        const inv = await tx.invitation.create({
           data: {
             organizationId: org.id,
             email,
@@ -182,6 +184,20 @@ export const POST = auth(async function POST(req) {
             invitedById: session.user.id,
           },
         });
+
+        await createAuditLog(tx, {
+          actorId: session.user.id,
+          action: "invitation:create",
+          targetType: "invitation",
+          targetId: inv.id,
+          details: {
+            organizationId: org.id,
+            email,
+            role,
+          },
+        });
+
+        return inv;
       }
     );
 
@@ -203,7 +219,7 @@ export const POST = auth(async function POST(req) {
           email: invitation.email,
           role: invitation.role,
           status: invitation.status,
-          expiresAt: invitation.expiresAt,
+          expiresAt: formatUtcNaiveTimestamp(invitation.expiresAt),
         },
       },
       { status: 201 }

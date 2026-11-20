@@ -15,7 +15,9 @@ export interface RollupResult {
  * Delete + insert happens in one transaction, making reruns
  * deterministic.
  *
- * Bucket timezone is UTC.
+ * Event timestamps are stored as UTC in timestamp-without-time-zone columns.
+ * Rollup buckets therefore use UTC calendar boundaries, independent of the
+ * PostgreSQL session timezone and each organization's display timezone.
  * Hourly rollups cover the last 72 hours.
  * Daily rollups cover the last 90 days.
  */
@@ -55,7 +57,7 @@ export async function rebuildEventRollups(
 
       await tx.$executeRaw`
         DELETE FROM event_hourly_rollups
-        WHERE "bucketStart" >= ${hourlyFrom}
+        WHERE "bucketStart" >= (${hourlyFrom}::timestamp - INTERVAL '1 day')
       `;
 
       await tx.$executeRaw`
@@ -110,7 +112,7 @@ export async function rebuildEventRollups(
 
       await tx.$executeRaw`
         DELETE FROM event_daily_rollups
-        WHERE "bucketStart" >= ${dailyFrom}::date
+        WHERE "bucketStart" >= (${dailyFrom}::date - INTERVAL '1 day')
       `;
 
       await tx.$executeRaw`

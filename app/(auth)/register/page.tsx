@@ -14,12 +14,14 @@ export default function RegisterPage() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
   const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    setErrorMessage('');
 
     if (password !== confirmPassword) {
-      alert("Passwords do not match");
+      setErrorMessage("Passwords do not match");
       return;
     }
 
@@ -41,7 +43,7 @@ export default function RegisterPage() {
       const data = await response.json();
 
       if (!response.ok) {
-        alert(data.message || "Registration failed");
+        setErrorMessage(data.message || "Registration failed");
         return;
       }
 
@@ -52,15 +54,14 @@ export default function RegisterPage() {
       });
 
       if (loginResult?.error) {
-        alert("Account created successfully. Please login.");
-        router.push("/login");
+        router.push("/login?registered=true");
         return;
       }
 
       router.push("/dashboard");
     } catch (error) {
       console.error("Registration error:", error);
-      alert("Something went wrong. Please try again.");
+      setErrorMessage("Something went wrong. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -93,6 +94,11 @@ export default function RegisterPage() {
 
         {/* Register Card */}
         <div className="rounded-2xl border border-slate-800 bg-[#0F172A]/90 p-6 sm:p-8 shadow-2xl backdrop-blur-md">
+          {errorMessage && (
+            <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-950/40 p-3 text-xs text-rose-300">
+              {errorMessage}
+            </div>
+          )}
           <form onSubmit={handleRegister} className="space-y-4">
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">

@@ -1,0 +1,93 @@
+name: ATLAS Analytics CI
+
+on:
+  push:
+    branches: [main, develop, "feature/**", "security/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlas-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci_password
+          POSTGRES_DB: atlas_analytics_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d atlas_analytics_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL_MIGRATION: postgresql://postgres:postgres_ci_password@localhost:5432/atlas_analytics_test
+      DATABASE_URL_TEST_FIXTURES: postgresql://postgres:postgres_ci_password@localhost:5432/atlas_analytics_test
+      DATABASE_URL_APP: postgresql://atlas_app:atlas_app_ci_password@localhost:5432/atlas_analytics_test
+      DATABASE_URL_OPS: postgresql://atlas_ops:atlas_ops_ci_password@localhost:5432/atlas_analytics_test
+      DATABASE_URL: postgresql://postgres:postgres_ci_password@localhost:5432/atlas_analytics_test
+      ATLAS_MIGRATOR_PASSWORD: atlas_migrator_ci_password
+      ATLAS_APP_PASSWORD: atlas_app_ci_password
+      ATLAS_OPS_PASSWORD: atlas_ops_ci_password
+      AUTH_SECRET: ci-only-auth-secret-change-me-32-bytes-minimum
+      NEXTAUTH_SECRET: ci-only-nextauth-secret-change-me-32
+      NEXTAUTH_URL: http://localhost:3000
+      BASE_URL: http://localhost:3000
+      CRON_SECRET: ci-only-cron-secret
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Tier 1 Database Role Provisioning
+        run: node scripts/db-tier1-provision-roles.mjs
+      - name: Generate Prisma client
+        run: npx prisma generate --config prisma7.config.ts
+      - name: Validate Prisma schema
+        run: npx prisma validate --config prisma7.config.ts
+      - name: Tier 2 Prisma Migration Deployment
+        run: npx prisma migrate deploy --config prisma7.config.ts
+      - name: Tier 3 Post-Migration Ownership & Privilege Normalization
+        run: node scripts/db-tier3-normalize-ownership.mjs
+      - name: Release script syntax
+        run: npm run check:release-scripts
+      - name: TypeScript
+        run: npx tsc --noEmit
+      - name: ESLint
+        run: npm run lint
+      - name: Unit and integration tests
+        run: npx vitest run
+      - name: Production build
+        run: npm run build
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Playwright E2E
+        run: npx playwright test
+      - name: Build release archives
+        run: npm run package:release
+      - name: Verify release archives
+        run: npm run verify:release
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: ignore

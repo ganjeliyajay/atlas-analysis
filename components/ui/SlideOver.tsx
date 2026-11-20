@@ -13,14 +13,8 @@ interface SlideOverProps {
   width?: string;
 }
 
-export function SlideOver({
-  isOpen,
-  onClose,
-  title,
-  subtitle,
-  children,
-  width = 'max-w-xl',
-}: SlideOverProps) {
+export function SlideOver({ isOpen, onClose, title, subtitle, children, width = 'max-w-xl' }: SlideOverProps) {
+  
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
