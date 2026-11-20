@@ -1,5 +1,6 @@
-import { prismaOps } from "@/lib/prisma-ops"
+import { prisma } from "@/lib/prisma"
 import { hashLegacyApiKey, verifyApiKey } from "@/lib/api-keys"
+import { eventHub } from "@/lib/analytics/event-hub"
 
 import { hashIngestionPayload } from "@/lib/ingestion/idempotency"
 
@@ -27,6 +28,7 @@ type IngestionErrorCode =
   | "invalid_event"
   | "invalid_batch"
   | "quota_exceeded"
+  | "tenant_suspended"
   | "idempotency_conflict"
   | "internal_server_error"
 
@@ -159,44 +161,34 @@ function getNextMonthStartUTC(periodStart: Date): Date {
 }
 
 function getRateLimitHeaders(rateLimit: {
-  limit: number
-
-  remaining: number
-
-  reset: number
+  limit: number;
+  remaining: number;
+  reset: number;
 }) {
   return {
     "X-RateLimit-Limit": String(rateLimit.limit),
-
-    "X-Ratelimit-Remaining": String(rateLimit.remaining),
-
+    "X-RateLimit-Remaining": String(rateLimit.remaining),
     "X-RateLimit-Reset": String(rateLimit.reset),
-  }
+  };
 }
 
 export async function POST(request: Request) {
-  let projectId: string | null = null
-
-  let organizationId: string | null = null
-
-  let apiKeyHash: string | null = null
-
-  let incomingPayloadHash: string | null = null
-
-  let idempotencyKey: string | null = null
+  let projectId: string | null = null;
+  let organizationId: string | null = null;
+  let apiKeyHash: string | null = null;
+  let incomingPayloadHash: string | null = null;
+  let idempotencyKey: string | null = null;
 
   try {
-    let rateLimitHeaders: Record<string, string> = {}
+    let rateLimitHeaders: Record<string, string> = {
+      "X-RateLimit-Limit": "10000",
+      "X-RateLimit-Remaining": "10000",
+      "X-RateLimit-Reset": String(Math.floor(Date.now() / 1000) + 60),
+    };
 
-    // 1. Read API key from Authorization header or sendBeacon query.
-
-    const url = new URL(request.url)
-
-    const queryApiKey = url.searchParams.get("apiKey")
-
-    const authorization =
-      request.headers.get("authorization") ??
-      (queryApiKey ? `Bearer ${queryApiKey}` : null)
+    // 1. Read API key only from Authorization header. Credentials in query
+    // strings can leak into proxy/access logs and browser history.
+    const authorization = request.headers.get("authorization")
 
     if (!authorization?.startsWith("Bearer ")) {
       return NextResponse.json(
@@ -230,32 +222,33 @@ export async function POST(request: Request) {
     // Dedicated API keys are verified against salted scrypt hashes below.
     apiKeyHash = hashLegacyApiKey(apiKey)
 
-    // 3. Resolve project and organization using the dedicated read-only operations client.
+    // 3. Resolve project and organization using secure SECURITY DEFINER procedures (no global ops role needed).
     let project: {
       id: string;
       organizationId: string;
       organization: {
-        eventQuota: number;
+        eventQuota: number; status: string;
       };
     } | null = null;
 
-    const apiKeyCandidates = await prismaOps.apiKey.findMany({
-      // The second prefix preserves lookup compatibility with older dedicated
-      // keys that stored only 17 prefix characters before the scrypt rollout.
-      where: {
-        keyPrefix: {
-          in: [apiKey.slice(0, 23), apiKey.slice(0, 17)],
-        },
-      },
-      include: {
-        organization: {
-          select: { eventQuota: true },
-        },
-        project: {
-          select: { id: true, organizationId: true },
-        },
-      },
-    });
+    type ApiKeyCandidate = {
+      id: string;
+      organizationId: string;
+      projectId: string | null;
+      keyPrefix: string;
+      keyHash: string;
+      revokedAt: Date | null;
+      expiresAt: Date | null;
+      eventQuota: number;
+      status: string;
+    };
+
+    const prefix23 = apiKey.slice(0, 23);
+    const prefix17 = apiKey.slice(0, 17);
+
+    const apiKeyCandidates = await prisma.$queryRaw<ApiKeyCandidate[]>(Prisma.sql`
+      SELECT * FROM lookup_api_key_for_ingestion(${prefix23}, ${prefix17})
+    `);
 
     const apiKeyRecord = apiKeyCandidates.find((candidate) =>
       verifyApiKey(apiKey, candidate.keyHash),
@@ -276,61 +269,61 @@ export async function POST(request: Request) {
         );
       }
 
-      // Update lastUsedAt asynchronously
-      prismaOps.apiKey
-        .update({
-          where: { id: apiKeyRecord.id },
-          data: { lastUsedAt: new Date() },
-        })
-        .catch((e) => console.error("Failed to update apiKey lastUsedAt:", e));
-
-      organizationId = apiKeyRecord.organizationId;
+      const resolvedOrganizationId = apiKeyRecord.organizationId;
+      organizationId = resolvedOrganizationId;
 
       if (apiKeyRecord.projectId) {
         projectId = apiKeyRecord.projectId;
       } else {
-        const defaultProject = await prismaOps.project.findFirst({
-          where: { organizationId },
-          select: { id: true },
-          orderBy: { createdAt: "asc" },
-        });
+        const defaultProject = await withIngestionTenantContext(
+          resolvedOrganizationId,
+          async (tx) =>
+            tx.project.findFirst({
+              where: { organizationId: resolvedOrganizationId },
+              select: { id: true },
+              orderBy: { createdAt: "asc" },
+            })
+        );
         projectId = defaultProject?.id ?? null;
       }
 
       if (projectId) {
         project = {
           id: projectId,
-          organizationId,
-          organization: apiKeyRecord.organization,
+          organizationId: resolvedOrganizationId,
+          organization: {
+            eventQuota: apiKeyRecord.eventQuota,
+            status: apiKeyRecord.status,
+          },
         };
       }
     } else {
       // Fallback: check legacy Project.apiKeyHash for backward compatibility
-      const legacyProject = apiKeyHash
-        ? await prismaOps.project.findUnique({
-            where: { apiKeyHash },
-            select: {
-              id: true,
-              organizationId: true,
-            },
-          })
-        : null;
+      type LegacyProjectCandidate = {
+        id: string;
+        organizationId: string;
+        eventQuota: number;
+        status: string;
+      };
+
+      const legacyCandidates = apiKeyHash
+        ? await prisma.$queryRaw<LegacyProjectCandidate[]>(Prisma.sql`
+            SELECT * FROM lookup_legacy_project_for_ingestion(${apiKeyHash})
+          `)
+        : [];
+      const legacyProject = legacyCandidates[0] ?? null;
 
       if (legacyProject) {
-        const legacyOrganization = await prismaOps.organization.findUnique({
-          where: { id: legacyProject.organizationId },
-          select: { eventQuota: true },
-        });
-
-        if (legacyOrganization) {
-          projectId = legacyProject.id;
-          organizationId = legacyProject.organizationId;
-          project = {
-            id: legacyProject.id,
-            organizationId: legacyProject.organizationId,
-            organization: legacyOrganization,
-          };
-        }
+        projectId = legacyProject.id;
+        organizationId = legacyProject.organizationId;
+        project = {
+          id: legacyProject.id,
+          organizationId: legacyProject.organizationId,
+          organization: {
+            eventQuota: legacyProject.eventQuota,
+            status: legacyProject.status,
+          },
+        };
       }
     }
 
@@ -344,9 +337,83 @@ export async function POST(request: Request) {
       );
     }
 
+    if (project.organization.status === "suspended") {
+      await logIngestionError({
+        errorCode: "tenant_suspended",
+        statusCode: 403,
+        projectId,
+        organizationId,
+        apiKeyHash,
+      });
+
+      return NextResponse.json(
+        {
+          error: "tenant_suspended",
+          message: "Organization tenant is suspended. Event ingestion is disabled.",
+        },
+        {
+          status: 403,
+          headers: rateLimitHeaders,
+        }
+      );
+    }
+
+    const validOrgId = organizationId;
+    const validProjectId = projectId;
+
+    const projectMetadata = await withIngestionTenantContext(
+      validOrgId,
+      (tx) => tx.project.findFirst({
+        where: { id: validProjectId, organizationId: validOrgId },
+        select: { name: true },
+      }),
+    );
+
+    if (!projectMetadata) {
+      return NextResponse.json(
+        { error: "Project not found for API key" },
+        { status: 401, headers: rateLimitHeaders },
+      );
+    }
+
     // 5. Parse JSON body.
 
-    const body = await request.json().catch(() => null)
+    const reader = request.body?.getReader();
+    const bodyChunks: Uint8Array[] = [];
+    let bodyByteLength = 0;
+
+    if (reader) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+
+        bodyByteLength += value.byteLength;
+        if (bodyByteLength > 1_048_576) {
+          await reader.cancel();
+          return NextResponse.json(
+            { error: "Payload exceeds the 1 MB limit" },
+            { status: 413, headers: rateLimitHeaders },
+          );
+        }
+        bodyChunks.push(value);
+      }
+    }
+
+    const bodyBytes = new Uint8Array(bodyByteLength);
+    let bodyOffset = 0;
+    for (const chunk of bodyChunks) {
+      bodyBytes.set(chunk, bodyOffset);
+      bodyOffset += chunk.byteLength;
+    }
+    const rawBody = new TextDecoder().decode(bodyBytes);
+
+    let body: unknown = null;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      body = null;
+    }
 
     if (body === null) {
       await logIngestionError({
@@ -635,32 +702,28 @@ export async function POST(request: Request) {
           })
         }
 
-        // Insert all events in one database operation.
+        // Assign stable event IDs/timestamps before insertion so the post-commit
+        // live notification refers to the exact records that were persisted.
+        const persistedEvents = events.map((event) => ({
+          id: randomUUID(),
+          eventName: event.eventName,
+          userId: event.userId ?? null,
+          sessionId: event.sessionId ?? null,
+          properties:
+            event.properties === undefined || event.properties === null
+              ? undefined
+              : (event.properties as Prisma.InputJsonValue),
+          pageUrl: event.pageUrl ?? null,
+          country: event.country ?? null,
+          device: event.device ?? null,
+          browser: event.browser ?? null,
+          createdAt: new Date(),
+          projectId: project.id,
+        }));
 
         const createdEvents = await tx.analyticsEvent.createMany({
-          data: events.map((event) => ({
-            eventName: event.eventName,
-
-            userId: event.userId ?? null,
-
-            sessionId: event.sessionId ?? null,
-
-            properties:
-              event.properties === undefined || event.properties === null
-                ? undefined
-                : (event.properties as Prisma.InputJsonValue),
-
-            pageUrl: event.pageUrl ?? null,
-
-            country: event.country ?? null,
-
-            device: event.device ?? null,
-
-            browser: event.browser ?? null,
-
-            projectId: project.id,
-          })),
-        })
+          data: persistedEvents,
+        });
 
         const currentUsed = usageIncrement[0]?.eventCount ?? 0;
 
@@ -704,10 +767,22 @@ export async function POST(request: Request) {
 
         return {
           quotaExceeded: false as const,
-
           responseBody,
-
           used: currentUsed,
+          broadcastEvents: persistedEvents.map((event) => ({
+            id: event.id,
+            eventName: event.eventName,
+            userId: event.userId,
+            sessionId: event.sessionId,
+            properties: event.properties,
+            pageUrl: event.pageUrl,
+            country: event.country,
+            device: event.device,
+            browser: event.browser,
+            createdAt: event.createdAt.toISOString(),
+            projectId: project.id,
+            projectName: projectMetadata.name,
+          })),
         }
       },
     )
@@ -758,6 +833,18 @@ export async function POST(request: Request) {
           },
         },
       )
+    }
+
+    // Broadcast only after the database transaction commits. This prevents
+    // SSE consumers from observing events that may later roll back.
+    for (const event of result.broadcastEvents) {
+      try {
+        eventHub.publish(organizationId, event);
+      } catch (broadcastError) {
+        // The database commit is authoritative. A broken SSE listener must
+        // not turn a successful ingestion into a retryable HTTP failure.
+        console.error("Live event broadcast failed:", broadcastError);
+      }
     }
 
     // 12. Return accepted response.

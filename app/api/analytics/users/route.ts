@@ -1,11 +1,14 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { getActiveOrganizationForUser } from "@/lib/organization";
 import { Prisma } from "@/lib/generated/prisma/client";
-import {
-  withTenantContext,
-  withUserContext,
-} from "@/lib/db-context";
+import { withTenantContext } from "@/lib/db-context";
+import { z } from "zod";
+
+const usersQuerySchema = z.object({
+  projectId: z.string().max(100).optional().nullable(),
+});
 
 const ACTIVE_WINDOW_DAYS = 30;
 
@@ -22,29 +25,31 @@ export const GET = auth(async function GET(request) {
     }
 
     // Resolve the user's organization.
-    const membership = await withUserContext(userId, (tx) =>
-      tx.organizationMember.findFirst({
-        where: { userId },
-        select: { organizationId: true },
-        orderBy: { createdAt: "asc" },
-      }),
-    );
+    const membership = await getActiveOrganizationForUser(userId);
 
     if (!membership) {
       return jsonError("Organization not found", 404);
     }
 
     const { searchParams } = new URL(request.url);
-    const rawProjectId = searchParams.get("projectId");
-    const projectId = rawProjectId?.trim() || null;
+    const parsedQuery = usersQuerySchema.safeParse({
+      projectId: searchParams.get("projectId"),
+    });
 
-    if (projectId && projectId.length > 200) {
-      return jsonError("Invalid projectId", 400);
+    if (!parsedQuery.success) {
+      return jsonError("Invalid query parameters", 400);
     }
 
+    const projectId = parsedQuery.data.projectId?.trim() || null;
+
     const now = new Date();
-    const startDate = new Date(now);
-    startDate.setDate(startDate.getDate() - ACTIVE_WINDOW_DAYS);
+    const utcTodayStart = new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+    ));
+    const startDate = new Date(utcTodayStart);
+    startDate.setUTCDate(startDate.getUTCDate() - (ACTIVE_WINDOW_DAYS - 1));
 
     return await withTenantContext(
       userId,
@@ -224,7 +229,7 @@ export const GET = auth(async function GET(request) {
                     'id', "id",
                     'name', "eventName",
                     'page', COALESCE("pageUrl", '—'),
-                    'timestamp', "createdAt"
+                    'timestamp', TO_CHAR("createdAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
                   )
                   ORDER BY "createdAt" DESC
                 ) AS events
@@ -235,17 +240,17 @@ export const GET = auth(async function GET(request) {
 
             daily_counts AS (
               SELECT
-                DATE("createdAt" AT TIME ZONE 'UTC') AS activity_date,
+                DATE("createdAt") AS activity_date,
                 COUNT(DISTINCT "userId")::int AS user_count
               FROM recent_events
-              GROUP BY DATE("createdAt" AT TIME ZONE 'UTC')
+              GROUP BY DATE("createdAt")
             ),
 
             daily_series AS (
               SELECT
                 generate_series(
-                  DATE_TRUNC('day', ${now}::timestamp) - INTERVAL '29 days',
-                  DATE_TRUNC('day', ${now}::timestamp),
+                  ${utcTodayStart}::timestamp - INTERVAL '29 days',
+                  ${utcTodayStart}::timestamp,
                   INTERVAL '1 day'
                 )::date AS activity_date
             ),
@@ -281,8 +286,8 @@ export const GET = auth(async function GET(request) {
                       'email', u.id,
                       'country', u.country,
                       'device', u.device,
-                      'firstSeen', u.first_seen,
-                      'lastSeen', u.last_seen,
+                      'firstSeen', TO_CHAR(u.first_seen, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                      'lastSeen', TO_CHAR(u.last_seen, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
                       'totalEvents', u.total_events,
                       'sessionsCount', u.sessions_count,
                       'status', 'active',
@@ -291,12 +296,12 @@ export const GET = auth(async function GET(request) {
                         JSONB_BUILD_OBJECT(
                           'id', u.id || '-first',
                           'action', 'First seen',
-                          'timestamp', u.first_seen
+                          'timestamp', TO_CHAR(u.first_seen, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
                         ),
                         JSONB_BUILD_OBJECT(
                           'id', u.id || '-last',
                           'action', 'Last activity',
-                          'timestamp', u.last_seen
+                          'timestamp', TO_CHAR(u.last_seen, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
                         )
                       ),
                       'recentEvents', u.recent_events

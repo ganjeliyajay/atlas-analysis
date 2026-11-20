@@ -26,7 +26,6 @@ import {
   Building2,
   X,
 } from 'lucide-react';
-import { WORKSPACES } from '@/lib/dummy-data';
 import { cn } from '@/lib/utils';
 
 interface DashboardSidebarProps {

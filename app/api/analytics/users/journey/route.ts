@@ -1,10 +1,18 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import {
-  withTenantContext,
-  withUserContext,
-} from "@/lib/db-context";
+import { getActiveOrganizationForUser } from "@/lib/organization";
+import { formatUtcNaiveTimestamp } from "@/lib/analytics/date-utils";
+import { withTenantContext } from "@/lib/db-context";
+import { z } from "zod";
+
+const userJourneyQuerySchema = z.object({
+  userId: z.string().min(1, "User ID is required").max(255),
+  projectId: z.string().max(100).optional().nullable(),
+  sessionId: z.string().max(255).optional().nullable(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+});
 
 export const GET = auth(async function GET(request) {
   try {
@@ -19,19 +27,7 @@ export const GET = auth(async function GET(request) {
     }
 
     // 2. Organization membership
-    const membership = await withUserContext(authUserId, (tx) =>
-      tx.organizationMember.findFirst({
-        where: {
-          userId: authUserId,
-        },
-        select: {
-          organizationId: true,
-        },
-        orderBy: {
-          createdAt: "asc",
-        },
-      })
-    );
+    const membership = await getActiveOrganizationForUser(authUserId);
 
     if (!membership) {
       return NextResponse.json(
@@ -42,33 +38,23 @@ export const GET = auth(async function GET(request) {
 
     // 3. Query parameters
     const { searchParams } = new URL(request.url);
+    const rawQuery: Record<string, string> = {};
+    searchParams.forEach((val, key) => {
+      rawQuery[key] = val;
+    });
 
-    const userId = searchParams.get("userId");
-    const projectId = searchParams.get("projectId");
-    const sessionId = searchParams.get("sessionId");
-
-    const requestedPage = Number(searchParams.get("page") || 1);
-    const requestedLimit = Number(searchParams.get("limit") || 100);
-
-    if (!userId) {
+    const parsedQuery = userJourneyQuerySchema.safeParse(rawQuery);
+    if (!parsedQuery.success) {
       return NextResponse.json(
         {
           success: false,
-          error: "User ID is required",
+          error: parsedQuery.error.issues[0]?.message || "Invalid query parameters",
         },
         { status: 400 }
       );
     }
 
-    const page =
-      Number.isInteger(requestedPage) && requestedPage > 0
-        ? requestedPage
-        : 1;
-
-    const limit =
-      Number.isInteger(requestedLimit) && requestedLimit > 0
-        ? Math.min(requestedLimit, 200)
-        : 100;
+    const { userId, projectId, sessionId, page, limit } = parsedQuery.data;
 
     // 4. All tenant-scoped queries
     const result = await withTenantContext(
@@ -175,7 +161,7 @@ export const GET = auth(async function GET(request) {
           browser: event.browser || "Unknown",
           projectId: event.project.id,
           projectName: event.project.name,
-          timestamp: event.createdAt.toISOString(),
+          timestamp: formatUtcNaiveTimestamp(event.createdAt),
         }));
 
         // Build session summaries from fetched events
@@ -269,8 +255,8 @@ export const GET = auth(async function GET(request) {
           data: {
             user: {
               userId,
-              firstSeen: firstEvent?.createdAt.toISOString() ?? null,
-              lastSeen: lastEvent?.createdAt.toISOString() ?? null,
+              firstSeen: firstEvent ? formatUtcNaiveTimestamp(firstEvent.createdAt) : null,
+              lastSeen: lastEvent ? formatUtcNaiveTimestamp(lastEvent.createdAt) : null,
               totalEvents,
               totalSessions: uniqueSessions.size,
               totalPagesVisited: uniquePages.size,

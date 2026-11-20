@@ -1,21 +1,12 @@
-
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { getActiveOrganizationForUser } from "@/lib/organization";
+import { withTenantContext } from "@/lib/db-context";
 import {
-  withTenantContext,
-  withUserContext,
-} from "@/lib/db-context";
-
-type FunnelConfig = {
-  id: string;
-  name: string;
-  steps: string[];
-};
-
-type FunnelEvent = {
-  eventName: string;
-  createdAt: Date;
-};
+  executePostgreSqlFunnel,
+  emptyFunnelResult,
+} from "@/lib/analytics/funnel-engine";
+import { z } from "zod";
 
 const RANGE_DAYS: Record<string, number> = {
   today: 1,
@@ -26,379 +17,286 @@ const RANGE_DAYS: Record<string, number> = {
 
 const ALLOWED_WINDOWS = [1, 7, 30] as const;
 
-function calculateFunnel(
-  eventsByUser: Map<string, FunnelEvent[]>,
-  steps: string[],
-  windowDays: number,
-) {
-  const counts = new Array<number>(steps.length).fill(0);
-  const windowMs = windowDays * 24 * 60 * 60 * 1000;
+const funnelQuerySchema = z.object({
+  steps: z
+    .string()
+    .min(1, "steps parameter is required")
+    .max(605)
+    .transform((str) => str.split(",").map((step) => step.trim()).filter(Boolean))
+    .refine((arr) => arr.length >= 2 && arr.length <= 6, {
+      message: "Funnel must contain between 2 and 6 steps.",
+    })
+    .refine((arr) => arr.every((step) => step.length <= 100), {
+      message: "Each funnel event name must be 100 characters or fewer.",
+    })
+    .refine((arr) => new Set(arr).size === arr.length, {
+      message: "Funnel steps must be unique.",
+    }),
+  range: z.enum(["today", "7d", "30d", "90d", "custom"]).default("30d"),
+  conversionWindowDays: z
+    .string()
+    .optional()
+    .transform((val) => (val ? Number(val) : 7))
+    .refine((val) => ALLOWED_WINDOWS.includes(val as (typeof ALLOWED_WINDOWS)[number]), {
+      message: "Conversion window must be 1, 7, 14, or 30 days.",
+    }),
+  projectId: z.string().max(100).default("All"),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "startDate must use YYYY-MM-DD").optional(),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "endDate must use YYYY-MM-DD").optional(),
+});
 
-  for (const events of eventsByUser.values()) {
-    let currentStep = 0;
-    let firstStepTime: Date | null = null;
-    let previousStepTime: Date | null = null;
+const postFunnelSchema = z.object({
+  funnels: z.array(
+    z.object({
+      id: z.string().min(1, "Funnel ID is required"),
+      name: z.string().trim().min(1, "Funnel name is required").max(100),
+      steps: z.array(z.string().trim().min(1).max(100)).min(2).max(6)
+        .refine((steps) => new Set(steps).size === steps.length, {
+          message: "Funnel steps must be unique.",
+        }),
+    })
+  ).min(1).max(6),
+  projectId: z.string().max(100).optional().default("All"),
+  range: z.enum(["today", "7d", "30d", "90d", "custom"]).default("30d"),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  conversionWindowDays: z.number().refine((val) => ALLOWED_WINDOWS.includes(val as (typeof ALLOWED_WINDOWS)[number]), {
+    message: "Conversion window must be 1, 7, 14, or 30 days",
+  }).default(7),
+});
 
-    for (const event of events) {
-      if (currentStep === 0) {
-        if (event.eventName !== steps[0]) continue;
+function parseUtcDate(value: string): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) throw new Error("Dates must use YYYY-MM-DD format.");
 
-        firstStepTime = event.createdAt;
-        previousStepTime = event.createdAt;
-        currentStep = 1;
-        continue;
-      }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw new Error("Date is not a valid calendar date.");
+  }
+  return date;
+}
 
-      if (!firstStepTime || !previousStepTime) break;
-
-      const elapsed =
-        event.createdAt.getTime() - firstStepTime.getTime();
-
-      if (elapsed > windowMs) break;
-
-      if (event.createdAt.getTime() < previousStepTime.getTime()) {
-        continue;
-      }
-
-      if (event.eventName === steps[currentStep]) {
-        previousStepTime = event.createdAt;
-        currentStep++;
-
-        if (currentStep >= steps.length) break;
-      }
-    }
-
-    for (let index = 0; index < currentStep; index++) {
-      counts[index] = (counts[index] ?? 0) + 1;
-    }
+function getDateBounds(range: string, startParam?: string, endParam?: string) {
+  if (Boolean(startParam) !== Boolean(endParam)) {
+    throw new Error("Both startDate and endDate are required for a custom range.");
   }
 
-  const totalUsers = counts[0] ?? 0;
-  const convertedUsers = counts[counts.length - 1] ?? 0;
+  if (range === "custom" && (!startParam || !endParam)) {
+    throw new Error("Custom range requires startDate and endDate.");
+  }
 
-  const funnelSteps = steps.map((eventName, index) => {
-    const users = counts[index] ?? 0;
-    const previousUsers =
-      index === 0 ? users : counts[index - 1] ?? 0;
+  if (startParam && endParam) {
+    const start = parseUtcDate(startParam);
+    const end = parseUtcDate(endParam);
+    if (start > end) throw new Error("startDate must be on or before endDate.");
+    const endExclusive = new Date(end);
+    endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+    return { start, endExclusive };
+  }
 
-    const conversionFromStart =
-      totalUsers > 0
-        ? Number(((users / totalUsers) * 100).toFixed(2))
-        : 0;
-
-    const conversionFromPrevious =
-      previousUsers > 0
-        ? Number(((users / previousUsers) * 100).toFixed(2))
-        : 0;
-
-    const dropOffUsers =
-      index === 0 ? 0 : Math.max(previousUsers - users, 0);
-
-    const dropOffRate =
-      previousUsers > 0
-        ? Number(((dropOffUsers / previousUsers) * 100).toFixed(2))
-        : 0;
-
-    return {
-      eventName,
-      users,
-      conversionFromStart,
-      conversionFromPrevious,
-      dropOffUsers,
-      dropOffRate,
-    };
-  });
-
-  const overallConversionRate =
-    totalUsers > 0
-      ? Number(((convertedUsers / totalUsers) * 100).toFixed(2))
-      : 0;
-
-  return {
-    totalUsers,
-    convertedUsers,
-    overallConversionRate,
-    overallDropOffRate: Number(
-      (100 - overallConversionRate).toFixed(2),
-    ),
-    steps: funnelSteps,
-  };
+  const days = RANGE_DAYS[range] || 30;
+  const now = new Date();
+  const start = range === "today"
+    ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+    : new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  return { start, endExclusive: now };
 }
+
+export const GET = auth(async function GET(request) {
+  try {
+    const userId = request.auth?.user?.id;
+    if (!userId) {
+      return NextResponse.json({ success: false, error: "Authentication required" }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const rawQuery: Record<string, string> = {};
+    searchParams.forEach((val, key) => {
+      rawQuery[key] = val;
+    });
+
+    const parsedQuery = funnelQuerySchema.safeParse(rawQuery);
+    if (!parsedQuery.success) {
+      return NextResponse.json({
+        success: false,
+        error: parsedQuery.error.issues[0]?.message || "Invalid funnel query parameters.",
+      }, { status: 400 });
+    }
+
+    const { steps, range, conversionWindowDays, projectId, startDate, endDate } = parsedQuery.data;
+
+    let bounds: ReturnType<typeof getDateBounds>;
+    try {
+      bounds = getDateBounds(range, startDate, endDate);
+    } catch (error) {
+      return NextResponse.json({
+        success: false,
+        error: error instanceof Error ? error.message : "Invalid date range.",
+      }, { status: 400 });
+    }
+
+    const membership = await getActiveOrganizationForUser(userId);
+
+    if (!membership) {
+      const empty = emptyFunnelResult(steps);
+      return NextResponse.json({
+        success: true,
+        funnel: empty.steps,
+        totalUsers: 0,
+        convertedUsers: 0,
+        conversionWindowDays,
+        range: { startDate: bounds.start.toISOString(), endDate: bounds.endExclusive.toISOString() },
+      });
+    }
+
+    return await withTenantContext(userId, membership.organizationId, async (tx) => {
+      const projects = await tx.project.findMany({
+        where: {
+          organizationId: membership.organizationId,
+          ...(projectId !== "All" ? { id: projectId } : {}),
+        },
+        select: { id: true },
+      });
+
+      const projectIds = projects.map((project) => project.id);
+      if (projectId !== "All" && projectIds.length === 0) {
+        return NextResponse.json({ success: false, error: "Project not found or access denied." }, { status: 404 });
+      }
+
+      // Execute optimized PostgreSQL Funnel Engine
+      const result = await executePostgreSqlFunnel(
+        tx,
+        projectIds,
+        steps,
+        bounds.start,
+        bounds.endExclusive,
+        conversionWindowDays,
+      );
+
+      return NextResponse.json({
+        success: true,
+        funnel: result.steps.map((step) => ({
+          eventName: step.eventName,
+          users: step.users,
+          conversionFromStart: step.conversionFromStart,
+          conversionFromPrevious: step.conversionFromPrevious,
+          dropOffFromPrevious: step.dropOffUsers,
+          dropOffRate: step.dropOffRate,
+        })),
+        totalUsers: result.totalUsers,
+        convertedUsers: result.convertedUsers,
+        overallConversionRate: result.overallConversionRate,
+        overallDropOffRate: result.overallDropOffRate,
+        conversionWindowDays,
+        range: {
+          startDate: bounds.start.toISOString(),
+          endDate: new Date(bounds.endExclusive.getTime() - 1).toISOString(),
+        },
+      }, { headers: { "Cache-Control": "no-store, max-age=0" } });
+    });
+  } catch (error) {
+    console.error("Funnel analytics API error:", error);
+    return NextResponse.json({ success: false, error: "Failed to calculate funnel analytics." }, { status: 500 });
+  }
+});
 
 export const POST = auth(async function POST(request) {
   try {
     const userId = request.auth?.user?.id;
-
     if (!userId) {
-      return NextResponse.json(
-        { success: false, error: "Authentication required" },
-        { status: 401 },
-      );
+      return NextResponse.json({ success: false, error: "Authentication required" }, { status: 401 });
     }
 
-    const body = await request.json();
-
-    const {
-      funnels,
-      projectId,
-      range = "30d",
-      conversionWindowDays = 7,
-    } = body as {
-      funnels?: FunnelConfig[];
-      projectId?: string;
-      range?: string;
-      conversionWindowDays?: number;
-    };
-
-    if (!Array.isArray(funnels) || funnels.length < 2 || funnels.length > 4) {
-      return NextResponse.json(
-        { success: false, error: "Provide between 2 and 4 funnels" },
-        { status: 400 },
-      );
+    const body = await request.json().catch(() => ({}));
+    const parsedBody = postFunnelSchema.safeParse(body);
+    if (!parsedBody.success) {
+      return NextResponse.json({
+        success: false,
+        error: parsedBody.error.issues[0]?.message || "Invalid funnel request body.",
+      }, { status: 400 });
     }
 
-    if (!(range in RANGE_DAYS)) {
-      return NextResponse.json(
-        { success: false, error: "Invalid date range" },
-        { status: 400 },
-      );
+    const { funnels, projectId, range, startDate, endDate, conversionWindowDays } = parsedBody.data;
+
+    let dateBounds: ReturnType<typeof getDateBounds>;
+    try {
+      dateBounds = getDateBounds(range, startDate, endDate);
+    } catch (error) {
+      return NextResponse.json({
+        success: false,
+        error: error instanceof Error ? error.message : "Invalid date range",
+      }, { status: 400 });
     }
 
-    if (
-      !ALLOWED_WINDOWS.includes(
-        conversionWindowDays as (typeof ALLOWED_WINDOWS)[number],
-      )
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Conversion window must be 1, 7, or 30 days",
-        },
-        { status: 400 },
-      );
-    }
-
-    const validFunnels = funnels.map((funnel) => ({
-      ...funnel,
-      id: String(funnel.id || ""),
-      name: String(funnel.name || "").trim(),
-      steps: Array.isArray(funnel.steps)
-        ? funnel.steps.map((step) => String(step).trim()).filter(Boolean)
-        : [],
-    }));
-
-    for (const funnel of validFunnels) {
-      if (!funnel.id || !funnel.name) {
-        return NextResponse.json(
-          { success: false, error: "Every funnel needs an ID and name" },
-          { status: 400 },
-        );
-      }
-
-      if (funnel.steps.length < 2 || funnel.steps.length > 10) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: `Funnel "${funnel.name}" must contain 2 to 10 steps`,
-          },
-          { status: 400 },
-        );
-      }
-
-      if (
-        funnel.steps.some((step) => step.length > 100) ||
-        new Set(funnel.steps).size !== funnel.steps.length
-      ) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: `Funnel "${funnel.name}" has invalid or duplicate steps`,
-          },
-          { status: 400 },
-        );
-      }
-    }
-
-    if (
-      new Set(validFunnels.map((funnel) => funnel.id)).size !==
-      validFunnels.length
-    ) {
-      return NextResponse.json(
-        { success: false, error: "Funnel IDs must be unique" },
-        { status: 400 },
-      );
-    }
-
-    const membership = await withUserContext(userId, async (tx) => {
-      return tx.organizationMember.findFirst({
-        where: { userId },
-        select: { organizationId: true },
-        orderBy: { createdAt: "asc" },
-      });
-    });
+    const membership = await getActiveOrganizationForUser(userId);
 
     if (!membership) {
       return NextResponse.json({
         success: true,
-        data: {
-          funnels: [],
-          bestPerformingFunnel: null,
-          range,
-          conversionWindowDays,
-        },
+        results: [],
+        bestPerformingFunnel: null,
+        range,
+        conversionWindowDays,
       });
     }
 
-    return await withTenantContext(
-      userId,
-      membership.organizationId,
-      async (tx) => {
-        const projects = await tx.project.findMany({
-          where: {
-            organizationId: membership.organizationId,
-            ...(projectId && projectId !== "All" ? { id: projectId } : {}),
-          },
-          select: {
-            id: true,
-          },
-        });
+    return await withTenantContext(userId, membership.organizationId, async (tx) => {
+      const projects = await tx.project.findMany({
+        where: {
+          organizationId: membership.organizationId,
+          ...(projectId && projectId !== "All" ? { id: projectId } : {}),
+        },
+        select: { id: true },
+      });
 
-        const projectIds = projects.map((project) => project.id);
+      const projectIds = projects.map((project) => project.id);
+      if (projectId && projectId !== "All" && projectIds.length === 0) {
+        return NextResponse.json({ success: false, error: "Project not found or access denied" }, { status: 404 });
+      }
 
-        if (projectId && projectId !== "All" && projectIds.length === 0) {
-          return NextResponse.json(
-            {
-              success: false,
-              error: "Project not found or access denied",
-            },
-            { status: 404 },
-          );
-        }
-
-        if (projectIds.length === 0) {
-          return NextResponse.json({
-            success: true,
-            data: {
-              funnels: validFunnels.map((funnel) => ({
-                id: funnel.id,
-                name: funnel.name,
-                ...calculateFunnel(
-                  new Map<string, FunnelEvent[]>(),
-                  funnel.steps,
-                  conversionWindowDays,
-                ),
-              })),
-              bestPerformingFunnel: null,
-              range,
-              conversionWindowDays,
-            },
-          });
-        }
-
-        const now = new Date();
-        const startDate = new Date(now);
-
-        if (range === "today") {
-          startDate.setHours(0, 0, 0, 0);
-        } else {
-          startDate.setDate(startDate.getDate() - (RANGE_DAYS[range] ?? 7));
-        }
-
-        const allEventNames = Array.from(
-          new Set(validFunnels.flatMap((funnel) => funnel.steps)),
+      // Execute each funnel via PostgreSQL engine
+      const results = [];
+      for (const funnel of funnels) {
+        const result = await executePostgreSqlFunnel(
+          tx,
+          projectIds,
+          funnel.steps,
+          dateBounds.start,
+          dateBounds.endExclusive,
+          conversionWindowDays,
         );
 
-        const events = await tx.analyticsEvent.findMany({
-          where: {
-            projectId: { in: projectIds },
-            eventName: { in: allEventNames },
-            userId: { not: null },
-            createdAt: {
-              gte: startDate,
-              lte: now,
-            },
-          },
-          select: {
-            userId: true,
-            eventName: true,
-            createdAt: true,
-          },
-          orderBy: [
-            { createdAt: "asc" },
-            { id: "asc" },
-          ],
+        results.push({
+          id: funnel.id,
+          name: funnel.name,
+          ...result,
         });
+      }
 
-        const results = validFunnels.map((funnel) => {
-          const funnelEventsByUser = new Map<string, FunnelEvent[]>();
-          const allowedSteps = new Set(funnel.steps);
+      let bestPerformingFunnel: (typeof results)[0] | null = null;
+      for (const result of results) {
+        if (!bestPerformingFunnel || result.overallConversionRate > bestPerformingFunnel.overallConversionRate) {
+          bestPerformingFunnel = result;
+        }
+      }
 
-          for (const event of events) {
-            if (!event.userId || !allowedSteps.has(event.eventName)) {
-              continue;
-            }
-
-            const userEvents =
-              funnelEventsByUser.get(event.userId) ?? [];
-
-            userEvents.push({
-              eventName: event.eventName,
-              createdAt: event.createdAt,
-            });
-
-            funnelEventsByUser.set(event.userId, userEvents);
-          }
-
-          return {
-            id: funnel.id,
-            name: funnel.name,
-            ...calculateFunnel(
-              funnelEventsByUser,
-              funnel.steps,
-              conversionWindowDays,
-            ),
-          };
-        });
-
-        const rankedFunnels = [...results].sort(
-          (a, b) =>
-            b.overallConversionRate - a.overallConversionRate,
-        );
-
-        const topFunnel = rankedFunnels[0];
-        const bestPerformingFunnel =
-          topFunnel && topFunnel.totalUsers > 0
-            ? {
-                id: topFunnel.id,
-                name: topFunnel.name,
-                conversionRate: topFunnel.overallConversionRate,
-              }
-            : null;
-
-        return NextResponse.json(
-          {
-            success: true,
-            data: {
-              funnels: results,
-              bestPerformingFunnel,
-              range,
-              conversionWindowDays,
-              projectId: projectId || "All",
-              updatedAt: new Date().toISOString(),
-            },
-          },
-          {
-            headers: { "Cache-Control": "no-store, max-age=0" },
-          },
-        );
-      },
-    );
+      return NextResponse.json({
+        success: true,
+        results,
+        bestPerformingFunnel,
+        range,
+        conversionWindowDays,
+      });
+    });
   } catch (error) {
-    console.error("Funnel comparison API error:", error);
-
-    return NextResponse.json(
-      { success: false, error: "Failed to compare funnels" },
-      { status: 500 },
-    );
+    console.error("Multi-funnel API error:", error);
+    return NextResponse.json({ success: false, error: "Failed to compare conversion funnels" }, { status: 500 });
   }
 });

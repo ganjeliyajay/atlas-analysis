@@ -1,5 +1,6 @@
 
 import pg from "pg";
+import { assertDedicatedTestDatabase, assertLocalTestEndpoint } from "./test-safety.mjs";
 
 const { Pool } = pg;
 
@@ -18,6 +19,9 @@ if (!connectionString) {
   throw new Error("Set DATABASE_URL_OPS in .env.");
 }
 
+assertDedicatedTestDatabase(connectionString, "DATABASE_URL_OPS");
+assertLocalTestEndpoint(endpoint, "ATLAS_ALLOW_REMOTE_ROLLUP_TEST");
+
 const pool = new Pool({
   connectionString,
   max: 1,
@@ -34,22 +38,17 @@ async function runJob(label) {
       "Content-Type": "application/json",
     },
     body: "{}",
-    signal: AbortSignal.timeout(10 * 60 * 1000),
+    signal: AbortSignal.timeout(300_000),
   });
 
-  const responseText = await response.text();
-
   if (!response.ok) {
-    throw new Error(
-      `[${label}] Rollup job returned ${response.status}: ${responseText}`,
-    );
+    const responseBody = await response.text().catch(() => "");
+    throw new Error(`[${label}] Rollup endpoint returned HTTP ${response.status}: ${responseBody.slice(0, 500)}`);
   }
 
-  const result = JSON.parse(responseText);
-
-  console.log(`[${label}] Rollup job completed successfully.`);
+  const result = await response.json();
+  console.log(`[${label}] Rollup job completed via HTTP.`);
   console.log(JSON.stringify(result, null, 2));
-
   return result;
 }
 

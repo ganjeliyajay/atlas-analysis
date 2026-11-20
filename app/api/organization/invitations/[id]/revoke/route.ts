@@ -5,6 +5,7 @@ import { auth } from "@/auth";
 import { getCurrentOrganization } from "@/lib/organization";
 import { withTenantContext } from "@/lib/db-context";
 import { requireOrgPermission } from "@/lib/permissions";
+import { createAuditLog } from "@/lib/audit";
 
 export const POST = auth(async function POST(req, context) {
   try {
@@ -98,6 +99,16 @@ export const POST = auth(async function POST(req, context) {
           },
           data: {
             status: "revoked",
+          },
+        });
+
+        await createAuditLog(tx, {
+          actorId: session.user.id,
+          action: "invitation:revoke",
+          targetType: "invitation",
+          targetId: invitation.id,
+          details: {
+            organizationId: org.id,
           },
         });
 

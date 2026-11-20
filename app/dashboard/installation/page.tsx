@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Copy,
   Check,
@@ -8,11 +8,9 @@ import {
   Code2,
   Send,
   CheckCircle2,
-  Sparkles,
-  } from 'lucide-react';
-import { Card, CardTitle, } from '@/components/ui/Card';
+} from 'lucide-react';
+import { Card, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { INITIAL_API_KEYS } from '@/lib/dummy-data';
 import { cn } from '@/lib/utils';
 
 export default function InstallationPage() {
@@ -27,8 +25,22 @@ export default function InstallationPage() {
     'idle' | 'sending' | 'success' | 'verified'
   >('idle');
   const [testResponsePayload, setTestResponsePayload] = useState<string | null>(null);
+  const [apiKeyPrefix, setApiKeyPrefix] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState('');
 
-  const activeApiKey = (INITIAL_API_KEYS[0]?.keyPrefix ?? 'atlas_live_sample') + '_demo_token';
+  useEffect(() => {
+    fetch('/api/keys')
+      .then((res) => res.json())
+      .then((data) => {
+        const activeKey = data.keys?.find((key: { status?: string }) => key.status === 'active');
+        if (activeKey?.keyPrefix) setApiKeyPrefix(activeKey.keyPrefix);
+      })
+      .catch(() => {});
+  }, []);
+
+  // The API intentionally returns only key prefixes after creation. The raw
+  // secret must be pasted from the one-time creation response by the user.
+  const activeApiKey = apiKey.trim() || 'YOUR_ATLAS_API_KEY';
 
   const snippets = {
     nextjs: `// app/layout.tsx
@@ -61,173 +73,169 @@ import { initAtlas } from '@atlas/analytics-react';
 
 initAtlas({
   apiKey: '${activeApiKey}',
-  autoCapture: true,
-  debug: false
-});
-
-export function App() {
-  return <div>Your React App</div>;
-}`,
-    javascript: `<!-- Add to <head> of your HTML -->
+  options: {
+    trackPageviews: true,
+    batchSize: 50,
+    flushInterval: 2000
+  }
+});`,
+    javascript: `<!-- Add to <head> -->
 <script
-  defer
-  data-domain="hrms.enterprise.io"
+  src="https://cdn.atlasanalytics.io/v1/atlas.min.js"
   data-api-key="${activeApiKey}"
-  src="https://cdn.atlasanalytics.io/v2/atlas.min.js">
-</script>
-
-<script>
-  window.atlas = window.atlas || function() { (window.atlas.q = window.atlas.q || []).push(arguments) };
-  atlas('track', 'page_view');
-</script>`,
-    nodejs: `// server.js or lib/analytics.js
-import { AtlasClient } from '@atlas/analytics-node';
+  data-track-views="true"
+  defer
+></script>`,
+    nodejs: `import { AtlasClient } from '@atlas/analytics-node';
 
 const atlas = new AtlasClient({
   apiKey: '${activeApiKey}',
-  flushAt: 20,
-  flushInterval: 5000
+  host: 'https://ingest.atlasanalytics.io'
 });
 
 await atlas.track({
-  event: 'employee_login',
-  userId: 'usr_emp_4412',
+  eventName: 'subscription_upgraded',
+  userId: 'usr_847120',
   properties: {
-    department: 'Engineering',
-    login_method: 'SAML_SSO'
+    plan: 'enterprise',
+    arr: 12000
   }
 });`,
-    rest: `# Direct HTTP POST Telemetry Ingestion
-curl -X POST https://ingest.atlasanalytics.io/api/v1/events \\
+    rest: `curl -X POST https://ingest.atlasanalytics.io/api/v1/events \\
   -H "Authorization: Bearer ${activeApiKey}" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "event": "button_clicked",
-    "userId": "usr_9918",
-    "timestamp": "2026-10-28T18:00:00Z",
+    "eventName": "purchase_completed",
+    "userId": "usr_99120",
+    "sessionId": "sess_40192",
     "properties": {
-      "element_id": "btn_punch_in",
-      "shift": "morning"
+      "item": "analytics_starter_pack",
+      "amount": 49.00,
+      "currency": "USD"
     }
   }'`,
   };
 
-  const copyCode = (text: string) => {
-    navigator.clipboard.writeText(text);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(snippets[selectedPlatform]);
     setCopiedSnippet(true);
     setTimeout(() => setCopiedSnippet(false), 2000);
   };
 
-  const handleSendTestEvent = () => {
-    setTestStatus('sending');
-    setTimeout(() => {
-      setTestStatus('success');
-      setTestResponsePayload(
-        JSON.stringify(
-          {
-            status: 200,
-            message: 'Event accepted and buffered',
-            event_id: `evt_test_${Date.now()}`,
-            tenant_id: 'ten_jay_9918',
-            received_at: new Date().toISOString(),
-            latency_ms: 24,
-          },
-          null,
-          2
-        )
-      );
-    }, 1200);
-  };
+  const handleSendTestEvent = async () => {
+    if (!apiKey.trim()) {
+      setTestStatus('idle');
+      setTestResponsePayload(JSON.stringify({ error: 'Paste the full API key shown once when it was created.' }, null, 2));
+      return;
+    }
 
-  const stepsList = [
-    { num: 1, title: 'Project Registered', desc: 'HRMS Analytics created' },
-    { num: 2, title: 'API Key Active', desc: 'atl_live_8f9a2c3d token scoped' },
-    { num: 3, title: 'Package Installed', desc: 'SDK installed via npm/yarn' },
-    { num: 4, title: 'Embed Tracking Code', desc: 'Add provider to layout or root' },
-    { num: 5, title: 'Send Test Telemetry', desc: 'Dispatch sample payload' },
-    { num: 6, title: 'Live Verification', desc: 'Confirmed pipeline connection' },
-  ];
+    setTestStatus('sending');
+    setTestResponsePayload(null);
+
+    try {
+      const response = await fetch('/api/v1/events', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${activeApiKey}`,
+        },
+        body: JSON.stringify({
+          eventName: 'installation_verification_ping',
+          userId: 'test_client_installer',
+          sessionId: `sess_verify_${Date.now()}`,
+          pageUrl: window.location.href,
+          properties: {
+            platform: selectedPlatform,
+            testMode: true,
+            timestamp: new Date().toISOString(),
+          },
+        }),
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (response.status === 202 || response.status === 201 || response.status === 200) {
+        setTestStatus('success');
+        setTestResponsePayload(JSON.stringify(data || { status: 'accepted' }, null, 2));
+        setTimeout(() => setTestStatus('verified'), 1500);
+      } else {
+        setTestStatus('idle');
+        setTestResponsePayload(JSON.stringify({ status: response.status, data }, null, 2));
+      }
+    } catch {
+      setTestStatus('idle');
+      setTestResponsePayload(JSON.stringify({ error: 'Failed to dispatch event' }, null, 2));
+    }
+  };
 
   return (
     <div className="space-y-6">
-      {/* Title */}
+      {/* Page Header */}
       <div>
-        <h1 className="text-xl font-bold tracking-tight text-white">SDK Installation & Quickstart</h1>
+        <h1 className="text-xl font-bold tracking-tight text-white">
+          SDK & Platform Installation
+        </h1>
         <p className="mt-1 text-xs text-slate-400">
-          Connect your web, mobile, or backend application to Atlas Analytics in minutes.
+          Embed the client snippet into your application to start streaming event telemetry into ATLAS.
         </p>
       </div>
 
-      {/* Interactive Step-by-Step Wizard Bar */}
-      <Card className="p-4">
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3">
-          {stepsList.map((step) => {
-            const isCompleted = step.num < activeStep;
-            const isCurrent = step.num === activeStep;
-
-            return (
-              <div
-                key={step.num}
-                onClick={() => setActiveStep(step.num)}
+      {/* Installation Steps Overview */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        {[
+          { step: 1, title: 'Choose Platform', desc: 'Select your app runtime' },
+          { step: 2, title: 'Get Ingest Key', desc: 'Auto-configured for your active org' },
+          { step: 3, title: 'Install SDK', desc: 'npm, pnpm, or script tag' },
+          { step: 4, title: 'Verify Pipeline', desc: 'Emit a real test event' },
+        ].map((s) => (
+          <div
+            key={s.step}
+            onClick={() => setActiveStep(s.step)}
+            className={cn(
+              'p-3.5 rounded-lg border transition-all cursor-pointer',
+              activeStep === s.step
+                ? 'bg-indigo-950/30 border-indigo-500/50 text-white'
+                : 'bg-slate-900/40 border-slate-800 text-slate-400 hover:border-slate-700'
+            )}
+          >
+            <div className="flex items-center gap-2">
+              <span
                 className={cn(
-                  'rounded-lg p-2.5 border transition-all cursor-pointer text-xs',
-                  isCurrent
-                    ? 'border-indigo-500 bg-indigo-950/40'
-                    : isCompleted
-                    ? 'border-emerald-500/30 bg-emerald-950/20'
-                    : 'border-slate-800 bg-slate-900/40 opacity-70'
+                  'h-5 w-5 rounded-full flex items-center justify-center text-[10px] font-bold',
+                  activeStep === s.step
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-slate-800 text-slate-400'
                 )}
               >
-                <div className="flex items-center gap-1.5 mb-1">
-                  <span
-                    className={cn(
-                      'flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold',
-                      isCompleted
-                        ? 'bg-emerald-500 text-black'
-                        : isCurrent
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-slate-800 text-slate-400'
-                    )}
-                  >
-                    {isCompleted ? '✓' : step.num}
-                  </span>
-                  <span
-                    className={cn(
-                      'font-semibold truncate',
-                      isCurrent ? 'text-white' : isCompleted ? 'text-emerald-300' : 'text-slate-400'
-                    )}
-                  >
-                    Step {step.num}
-                  </span>
-                </div>
-                <div className="font-medium text-slate-300 truncate">{step.title}</div>
-              </div>
-            );
-          })}
-        </div>
-      </Card>
+                {s.step}
+              </span>
+              <span className="text-xs font-semibold">{s.title}</span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-1 pl-7">{s.desc}</p>
+          </div>
+        ))}
+      </div>
 
-      {/* Main Installation Guide */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left 2 Cols: Platform Selector & Code Snippets */}
-        <div className="lg:col-span-2 space-y-5">
-          {/* Platform Tab Buttons */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+      {/* Main Snippet Container */}
+      <Card className="bg-slate-900/60 border-slate-800 p-6">
+        {/* Platform Selector Tabs */}
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
+          <div className="flex items-center gap-2">
             {[
-              { id: 'nextjs', label: 'Next.js 14 / 15 / 16' },
-              { id: 'react', label: 'React.js' },
-              { id: 'javascript', label: 'Vanilla JS / HTML' },
+              { id: 'nextjs', label: 'Next.js 14+' },
+              { id: 'react', label: 'React SPA' },
+              { id: 'javascript', label: 'Vanilla JS / CDN' },
               { id: 'nodejs', label: 'Node.js Backend' },
-              { id: 'rest', label: 'REST API (cURL)' },
+              { id: 'rest', label: 'Raw HTTP / cURL' },
             ].map((p) => (
               <button
                 key={p.id}
                 onClick={() => setSelectedPlatform(p.id as typeof selectedPlatform)}
                 className={cn(
-                  'rounded-lg px-3.5 py-2 text-xs font-semibold whitespace-nowrap transition-all border',
+                  'px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
                   selectedPlatform === p.id
-                    ? 'border-indigo-500 bg-indigo-600 text-white shadow-md'
-                    : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white hover:bg-slate-800'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-slate-800/60 text-slate-400 hover:text-white hover:bg-slate-800'
                 )}
               >
                 {p.label}
@@ -235,167 +243,147 @@ curl -X POST https://ingest.atlasanalytics.io/api/v1/events \\
             ))}
           </div>
 
-          {/* Installation Shell Command */}
-          <Card className="p-4">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 block mb-2">
-              1. Install SDK Package
-            </span>
-            <div className="flex items-center justify-between rounded-lg bg-[#070A10] p-3 font-mono text-xs text-indigo-300 border border-slate-800">
-              <div className="flex items-center gap-2">
-                <Terminal className="h-4 w-4 text-slate-500 shrink-0" />
-                <span>
-                  {selectedPlatform === 'nextjs'
-                    ? 'npm install @atlas/analytics-next'
-                    : selectedPlatform === 'react'
-                    ? 'npm install @atlas/analytics-react'
-                    : selectedPlatform === 'nodejs'
-                    ? 'npm install @atlas/analytics-node'
-                    : 'No package needed — use standard CDN script tag'}
-                </span>
-              </div>
-              <button
-                onClick={() =>
-                  copyCode(
-                    selectedPlatform === 'nextjs'
-                      ? 'npm install @atlas/analytics-next'
-                      : 'npm install @atlas/analytics-react'
-                  )
-                }
-                className="text-slate-400 hover:text-white p-1"
-                title="Copy Command"
-              >
-                <Copy className="h-4 w-4" />
-              </button>
-            </div>
-          </Card>
-
-          {/* Code Integration Snippet */}
-          <Card className="p-0 overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/60">
-              <div className="flex items-center gap-2">
-                <Code2 className="h-4 w-4 text-indigo-400" />
-                <span className="text-xs font-semibold text-white">
-                  2. Add Tracking Configuration
-                </span>
-              </div>
-              <button
-                onClick={() => copyCode(snippets[selectedPlatform])}
-                className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-medium"
-              >
-                {copiedSnippet ? (
-                  <>
-                    <Check className="h-3.5 w-3.5 text-emerald-400" />
-                    <span className="text-emerald-400">Copied to clipboard</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-3.5 w-3.5" />
-                    <span>Copy Code</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-            <pre className="p-4 font-mono text-xs text-indigo-300 bg-[#070A10] overflow-x-auto leading-relaxed max-h-96">
-              {snippets[selectedPlatform]}
-            </pre>
-          </Card>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCopy}
+            className="text-xs flex items-center gap-1.5 border-slate-700 text-slate-300 hover:bg-slate-800"
+          >
+            {copiedSnippet ? (
+              <>
+                <Check className="h-3.5 w-3.5 text-emerald-400" />
+                <span>Copied Code</span>
+              </>
+            ) : (
+              <>
+                <Copy className="h-3.5 w-3.5" />
+                <span>Copy Snippet</span>
+              </>
+            )}
+          </Button>
         </div>
- 
-        <div className="space-y-5">
-          <Card className="p-5">
-            <div className="flex items-center gap-2 pb-3 border-b border-slate-800">
-              <Sparkles className="h-4 w-4 text-indigo-400" />
-              <CardTitle>Test Event Simulator</CardTitle>
-            </div>
 
-            <p className="mt-3 text-xs text-slate-400 leading-relaxed">
-              Verify your pipeline connection. Click the button below to dispatch a simulated telemetry payload.
-            </p>
+        <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/70 p-4">
+          <label htmlFor="atlas-api-key" className="mb-2 block text-xs font-medium text-slate-300">
+            Full ingestion API key
+          </label>
+          <input
+            id="atlas-api-key"
+            type="password"
+            autoComplete="off"
+            value={apiKey}
+            onChange={(event) => setApiKey(event.target.value)}
+            placeholder="Paste the full atlas_live_... key from its one-time creation screen"
+            className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white outline-none focus:border-indigo-500"
+          />
+          <p className="mt-2 text-[11px] text-slate-500">
+            {apiKeyPrefix
+              ? `A saved key beginning ${apiKeyPrefix} exists, but its full secret cannot be retrieved. `
+              : 'Create an ingestion key from API Keys first. '}
+            The complete secret is shown only once; if it was lost, create a new key.
+          </p>
+        </div>
 
-            <div className="mt-4 p-3 rounded-lg bg-slate-900/80 border border-slate-800 text-xs font-mono space-y-1">
-              <div className="text-slate-500 text-[10px]">SIMULATED PAYLOAD</div>
-              <div className="text-indigo-300 font-semibold">{`{"event": "test_ping"}`}</div>
-              <div className="text-slate-400 text-[11px]">project: HRMS Analytics</div>
-            </div>
+        {/* Code Snippet Box */}
+        <div className="mt-4 rounded-lg bg-slate-950 p-4 border border-slate-800 font-mono text-xs overflow-x-auto text-slate-300">
+          <pre className="whitespace-pre">
+            <code>{snippets[selectedPlatform]}</code>
+          </pre>
+        </div>
 
-            <div className="mt-4">
-              <Button
-                onClick={handleSendTestEvent}
-                disabled={testStatus === 'sending'}
-                className="w-full gap-2"
-              >
-                {testStatus === 'sending' ? (
-                  <>
-                    <span className="h-3.5 w-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" />
-                    <span>Dispatching test telemetry...</span>
-                  </>
-                ) : (
-                  <>
-                    <Send className="h-3.5 w-3.5" />
-                    <span>Send Test Event</span>
-                  </>
-                )}
-              </Button>
-            </div>
+        {/* Platform Instructions */}
+        <div className="mt-6 space-y-4">
+          <CardTitle className="text-sm font-semibold text-white">
+            Quick Installation Commands
+          </CardTitle>
 
-            {/* Connection Status Response */}
-            {testResponsePayload && (
-              <div className="mt-4 space-y-2">
-                <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                  <span>Connection Verified: HTTP 200 OK</span>
-                </div>
-                <pre className="rounded bg-[#070A10] p-2.5 text-[11px] font-mono text-emerald-300 overflow-x-auto border border-emerald-500/20">
-                  {testResponsePayload}
-                </pre>
+          <div className="space-y-2">
+            {selectedPlatform === 'nextjs' && (
+              <div className="rounded bg-slate-950 p-3 border border-slate-800 text-xs font-mono text-indigo-400 flex items-center justify-between">
+                <span>npm install @atlas/analytics-next</span>
+                <Terminal className="h-4 w-4 text-slate-500" />
               </div>
             )}
-          </Card>
-
-          {/* Checklist Card */}
-          <Card className="p-5">
-            <CardTitle className="text-xs uppercase tracking-wider text-slate-400 mb-3">
-              Integration Checklist
-            </CardTitle>
-            <div className="space-y-2.5 text-xs">
-              <label className="flex items-center gap-2 text-slate-300">
-                <input
-                  type="checkbox"
-                  defaultChecked
-                  className="rounded text-indigo-600 focus:ring-0"
-                />
-                <span>Set ATLAS_API_KEY environment variable</span>
-              </label>
-              <label className="flex items-center gap-2 text-slate-300">
-                <input
-                  type="checkbox"
-                  defaultChecked
-                  className="rounded text-indigo-600 focus:ring-0"
-                />
-                <span>Wrap application in AtlasProvider</span>
-              </label>
-              <label className="flex items-center gap-2 text-slate-300">
-                <input
-                  type="checkbox"
-                  defaultChecked
-                  className="rounded text-indigo-600 focus:ring-0"
-                />
-                <span>Enable automatic page view capture</span>
-              </label>
-              <label className="flex items-center gap-2 text-slate-300">
-                <input
-                  type="checkbox"
-                  defaultChecked
-                  className="rounded text-indigo-600 focus:ring-0"
-                />
-                <span>Verify Live Event Stream in dashboard</span>
-              </label>
-            </div>
-          </Card>
+            {selectedPlatform === 'react' && (
+              <div className="rounded bg-slate-950 p-3 border border-slate-800 text-xs font-mono text-indigo-400 flex items-center justify-between">
+                <span>npm install @atlas/analytics-react</span>
+                <Terminal className="h-4 w-4 text-slate-500" />
+              </div>
+            )}
+            {selectedPlatform === 'nodejs' && (
+              <div className="rounded bg-slate-950 p-3 border border-slate-800 text-xs font-mono text-indigo-400 flex items-center justify-between">
+                <span>npm install @atlas/analytics-node</span>
+                <Terminal className="h-4 w-4 text-slate-500" />
+              </div>
+            )}
+            {selectedPlatform === 'javascript' && (
+              <p className="text-xs text-slate-400">
+                Paste the script tag directly before the closing <code className="text-slate-300">&lt;/head&gt;</code> tag on every page you wish to track.
+              </p>
+            )}
+            {selectedPlatform === 'rest' && (
+              <p className="text-xs text-slate-400">
+                Send events to <code className="text-slate-300">/api/v1/events</code> using any standard HTTP client with an Authorization header.
+              </p>
+            )}
+          </div>
         </div>
-      </div>
+      </Card>
+
+      {/* Verification Simulator Panel */}
+      <Card className="bg-slate-900/60 border-slate-800 p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <Code2 className="h-4 w-4 text-emerald-400" />
+              <h2 className="text-sm font-semibold text-white">
+                Live Ingestion Pipe Verification
+              </h2>
+            </div>
+            <p className="text-xs text-slate-400 mt-1">
+              Trigger a test verification ping to confirm your API key and ingestion gateway are operational.
+            </p>
+          </div>
+
+          <Button
+            size="sm"
+            onClick={handleSendTestEvent}
+            disabled={testStatus === 'sending' || !apiKey.trim()}
+            className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs flex items-center gap-1.5"
+          >
+            {testStatus === 'sending' ? (
+              <>
+                <span className="h-3.5 w-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                <span>Dispatching...</span>
+              </>
+            ) : testStatus === 'verified' ? (
+              <>
+                <CheckCircle2 className="h-3.5 w-3.5 text-white" />
+                <span>Verified Connected</span>
+              </>
+            ) : (
+              <>
+                <Send className="h-3.5 w-3.5" />
+                <span>Emit Test Event</span>
+              </>
+            )}
+          </Button>
+        </div>
+
+        {testResponsePayload && (
+          <div className="mt-4 rounded-lg bg-slate-950 p-4 border border-slate-800">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                Ingestion Gateway Response
+              </span>
+              <span className="text-[11px] text-emerald-400 font-mono">HTTP 202 Accepted</span>
+            </div>
+            <pre className="text-xs font-mono text-emerald-400 overflow-x-auto whitespace-pre">
+              {testResponsePayload}
+            </pre>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
-

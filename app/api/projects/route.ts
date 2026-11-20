@@ -4,9 +4,10 @@ import { auth } from "@/auth";
 import {
   withTenantContext,
 } from "@/lib/db-context";
-import { getCurrentOrganization } from "@/lib/organization";
+import { getActiveOrganizationForUser } from "@/lib/organization";
 import { requireOrgPermission } from "@/lib/permissions";
 import { generateApiKey } from "@/lib/api-keys";
+import { formatUtcNaiveTimestamp } from "@/lib/analytics/date-utils";
 import { z } from "zod";
 function createSlug(name: string) {
   return name
@@ -34,15 +35,6 @@ const updateProjectSchema = z.object({
 });
 
 
-async function getUserOrganization() {
-  const currentOrg = await getCurrentOrganization();
-  if (!currentOrg) return null;
-  return {
-    organizationId: currentOrg.id,
-    organization: currentOrg,
-  };
-}
-
 // ============================================
 // GET: Fetch projects for current organization
 // ============================================
@@ -60,7 +52,7 @@ export const GET = auth(async function GET(request) {
 
     const userId = session.user.id;
 
-    const membership = await getUserOrganization();
+    const membership = await getActiveOrganizationForUser(userId);
 
     if (!membership) {
       return NextResponse.json(
@@ -72,22 +64,37 @@ export const GET = auth(async function GET(request) {
     const projects = await withTenantContext(
       userId,
       membership.organizationId,
-      (tx) =>
-        tx.project.findMany({
+      async (tx) => {
+        const projectList = await tx.project.findMany({
           where: {
             organizationId: membership.organizationId,
           },
           orderBy: {
             createdAt: "desc",
           },
-          include: {
-            _count: {
-              select: {
-                events: true,
-              },
-            },
-          },
-        })
+        });
+
+        if (projectList.length === 0) {
+          return [];
+        }
+
+        const projectIds = projectList.map((p) => p.id);
+        const counts = await tx.$queryRaw<{ projectId: string; count: bigint }[]>`
+          SELECT "projectId", COUNT(*)::bigint AS count
+          FROM "AnalyticsEvent"
+          WHERE "projectId" = ANY(${projectIds}::text[])
+          GROUP BY "projectId"
+        `;
+
+        const countMap = new Map(
+          counts.map((c) => [c.projectId, Number(c.count)])
+        );
+
+        return projectList.map((project) => ({
+          ...project,
+          eventCount: countMap.get(project.id) ?? 0,
+        }));
+      }
     );
 
     const formattedProjects = projects.map((project) => ({
@@ -98,8 +105,8 @@ export const GET = auth(async function GET(request) {
       platform: project.platform,
       description: project.description,
       environment: project.environment,
-      createdAt: project.createdAt,
-      eventCount: project._count.events,
+      createdAt: formatUtcNaiveTimestamp(project.createdAt),
+      eventCount: project.eventCount,
       apiKeyPrefix: project.apiKeyPrefix,
     }));
 
@@ -133,7 +140,7 @@ export const POST = auth(async function POST(request) {
 
     const userId = session.user.id;
 
-    const membership = await getUserOrganization();
+    const membership = await getActiveOrganizationForUser(userId);
 
     if (!membership) {
       return NextResponse.json(
@@ -231,7 +238,7 @@ export const POST = auth(async function POST(request) {
           platform: project.platform,
           description: project.description,
           environment: project.environment,
-          createdAt: project.createdAt,
+          createdAt: formatUtcNaiveTimestamp(project.createdAt),
           eventCount: 0,
           apiKeyPrefix: project.apiKeyPrefix,
         },
@@ -306,7 +313,7 @@ export const PATCH = auth(async function PATCH(request) {
       regenerateApiKey,
     } = validation.data;
 
-    const membership = await getUserOrganization();
+    const membership = await getActiveOrganizationForUser(userId);
 
     if (!membership) {
       return NextResponse.json(
@@ -466,7 +473,7 @@ export const DELETE = auth(async function DELETE(request) {
 
     const userId = session.user.id;
 
-    const membership = await getUserOrganization();
+    const membership = await getActiveOrganizationForUser(userId);
 
     if (!membership) {
       return NextResponse.json(

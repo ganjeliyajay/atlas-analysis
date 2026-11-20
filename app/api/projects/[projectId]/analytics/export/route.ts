@@ -1,36 +1,34 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import {
-  withTenantContext,
-  withUserContext,
-} from "@/lib/db-context";
+import { getActiveOrganizationForUser } from "@/lib/organization";
+import { formatUtcNaiveTimestamp } from "@/lib/analytics/date-utils";
+import { withTenantContext } from "@/lib/db-context";
 import { Prisma } from "@/lib/generated/prisma/client";
+import { z } from "zod";
 
 type Range = "today" | "7d" | "30d" | "90d";
 type ExportFormat = "csv" | "json";
 
-function getRangeStart(range: Range): Date {
-  const start = new Date();
-
+function getRangeStart(range: Range, now: Date): Date {
+  const start = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+  ));
   switch (range) {
     case "today":
-      start.setHours(start.getHours() - 24);
       break;
-
     case "7d":
-      start.setDate(start.getDate() - 7);
+      start.setUTCDate(start.getUTCDate() - 6);
       break;
-
     case "30d":
-      start.setDate(start.getDate() - 30);
+      start.setUTCDate(start.getUTCDate() - 29);
       break;
-
     case "90d":
-      start.setDate(start.getDate() - 90);
+      start.setUTCDate(start.getUTCDate() - 89);
       break;
   }
-
   return start;
 }
 
@@ -40,7 +38,7 @@ function escapeCsv(value: unknown): string {
   if (value === null || value === undefined) {
     text = "";
   } else if (value instanceof Date) {
-    text = value.toISOString();
+    text = formatUtcNaiveTimestamp(value);
   } else if (typeof value === "object") {
     text = JSON.stringify(value) ?? "";
   } else {
@@ -48,7 +46,7 @@ function escapeCsv(value: unknown): string {
   }
 
   // Prevent spreadsheet formula injection.
-  if (/^[\s]*[=+\-@]/.test(text)) {
+  if (/^[\s\t\r]*[=+\-@\t\r]/.test(text)) {
     text = `'${text}`;
   }
 
@@ -82,25 +80,19 @@ export const GET = auth(async function GET(request, context) {
     // 3. Query parameters
     const searchParams = new URL(request.url).searchParams;
 
-    const rangeParam = searchParams.get("range");
+    const rangeParam = searchParams.get("range") ?? "30d";
+    const rangeResult = z.enum(["today", "7d", "30d", "90d"]).safeParse(rangeParam);
+    if (!rangeResult.success) {
+      return NextResponse.json({ error: "Invalid range" }, { status: 400 });
+    }
+    const range: Range = rangeResult.data;
 
-    const allowedRanges: Range[] = [
-      "today",
-      "7d",
-      "30d",
-      "90d",
-    ];
-
-    const range: Range = allowedRanges.includes(
-      rangeParam as Range
-    )
-      ? (rangeParam as Range)
-      : "30d";
-
-    const formatParam = searchParams.get("format");
-
-    const format: ExportFormat =
-      formatParam === "csv" ? "csv" : "json";
+    const formatParam = searchParams.get("format") ?? "json";
+    const formatResult = z.enum(["csv", "json"]).safeParse(formatParam);
+    if (!formatResult.success) {
+      return NextResponse.json({ error: "Invalid export format" }, { status: 400 });
+    }
+    const format: ExportFormat = formatResult.data;
 
     const eventNameFilter =
       searchParams.get("eventName")?.trim().slice(0, 200) ||
@@ -111,21 +103,7 @@ export const GET = auth(async function GET(request, context) {
       null;
 
     // 4. Find user's organization
-    const membership = await withUserContext(
-      authUserId,
-      (tx) =>
-        tx.organizationMember.findFirst({
-          where: {
-            userId: authUserId,
-          },
-          orderBy: {
-            createdAt: "asc",
-          },
-          select: {
-            organizationId: true,
-          },
-        })
-    );
+    const membership = await getActiveOrganizationForUser(authUserId);
 
     if (!membership) {
       return NextResponse.json(
@@ -158,12 +136,14 @@ export const GET = auth(async function GET(request, context) {
           };
         }
 
-        const startDate = getRangeStart(range);
+        const now = new Date();
+        const startDate = getRangeStart(range, now);
 
         const where: Prisma.AnalyticsEventWhereInput = {
           projectId: project.id,
           createdAt: {
             gte: startDate,
+            lt: now,
           },
           ...(eventNameFilter
             ? { eventName: eventNameFilter }
@@ -176,12 +156,17 @@ export const GET = auth(async function GET(request, context) {
         // Fetch analytics
         const [
           totalEvents,
+          identifiedEvents,
           activeUsers,
           groupedEvents,
           dailyEventCounts,
           recentEvents,
         ] = await Promise.all([
           tx.analyticsEvent.count({ where }),
+
+          tx.analyticsEvent.count({
+            where: { ...where, userId: { not: null } },
+          }),
 
           tx.analyticsEvent.groupBy({
             by: ["userId"],
@@ -204,16 +189,17 @@ export const GET = auth(async function GET(request, context) {
           // Daily event volume
           tx.$queryRaw<
             Array<{
-              day: Date;
+              day: string;
               count: bigint;
             }>
           >(Prisma.sql`
             SELECT
-              DATE_TRUNC('day', "createdAt") AS day,
+              TO_CHAR(DATE_TRUNC('day', "createdAt"), 'YYYY-MM-DD') AS day,
               COUNT(*)::bigint AS count
             FROM "AnalyticsEvent"
             WHERE "projectId" = ${project.id}
               AND "createdAt" >= ${startDate}
+              AND "createdAt" < ${now}
               ${
                 eventNameFilter
                   ? Prisma.sql`AND "eventName" = ${eventNameFilter}`
@@ -245,7 +231,7 @@ export const GET = auth(async function GET(request, context) {
 
         const eventsOverTime = dailyEventCounts.map(
           (item) => ({
-            date: item.day.toISOString().slice(0, 10),
+            date: item.day,
             eventVolume: Number(item.count),
           })
         );
@@ -277,7 +263,7 @@ export const GET = auth(async function GET(request, context) {
             eventsPerUser:
               activeUsers.length > 0
                 ? Number(
-                    (totalEvents / activeUsers.length).toFixed(2)
+                    (identifiedEvents / activeUsers.length).toFixed(2)
                   )
                 : 0,
           },
@@ -287,7 +273,7 @@ export const GET = auth(async function GET(request, context) {
             id: event.id,
             eventName: event.eventName,
             userId: event.userId,
-            createdAt: event.createdAt.toISOString(),
+            createdAt: formatUtcNaiveTimestamp(event.createdAt),
           })),
           exportLimits: {
             recentEventsLimit: 1000,
@@ -319,91 +305,97 @@ export const GET = auth(async function GET(request, context) {
       exportData,
     } = result;
 
-    // 6. CSV export
+    // 6. Streaming CSV export
     if (format === "csv") {
-      const rows: unknown[][] = [
-        [
-          "Section",
-          "Name",
-          "Count",
-          "Percentage",
-          "Date",
-          "User ID",
-          "Event ID",
-        ],
-      ];
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode("\uFEFF"));
+          const pushRow = (row: unknown[]) => {
+            controller.enqueue(encoder.encode(row.map(escapeCsv).join(",") + "\r\n"));
+          };
 
-      rows.push([
-        "Project",
-        project.name,
-        "",
-        "",
-        "",
-        "",
-        "",
-      ]);
+          pushRow([
+            "Section",
+            "Name",
+            "Count",
+            "Percentage",
+            "Date",
+            "User ID",
+            "Event ID",
+          ]);
 
-      rows.push([
-        "KPI",
-        "Total Events",
-        totalEvents,
-        "",
-        "",
-        "",
-        "",
-      ]);
+          pushRow([
+            "Project",
+            project.name,
+            "",
+            "",
+            "",
+            "",
+            "",
+          ]);
 
-      rows.push([
-        "KPI",
-        "Active Users",
-        activeUsersCount,
-        "",
-        "",
-        "",
-        "",
-      ]);
+          pushRow([
+            "KPI",
+            "Total Events",
+            totalEvents,
+            "",
+            "",
+            "",
+            "",
+          ]);
 
-      for (const event of exportData.eventsOverTime) {
-        rows.push([
-          "Events Over Time",
-          "",
-          event.eventVolume,
-          "",
-          event.date,
-          "",
-          "",
-        ]);
-      }
+          pushRow([
+            "KPI",
+            "Active Users",
+            activeUsersCount,
+            "",
+            "",
+            "",
+            "",
+          ]);
 
-      for (const event of exportData.topEvents) {
-        rows.push([
-          "Top Event",
-          event.name,
-          event.count,
-          `${event.percentage}%`,
-          "",
-          "",
-          "",
-        ]);
-      }
+          for (const event of exportData.eventsOverTime) {
+            pushRow([
+              "Events Over Time",
+              "",
+              event.eventVolume,
+              "",
+              event.date,
+              "",
+              "",
+            ]);
+          }
 
-      for (const event of exportData.recentEvents) {
-        rows.push([
-          "Recent Event",
-          event.eventName,
-          "",
-          "",
-          event.createdAt,
-          event.userId ?? "",
-          event.id,
-        ]);
-      }
+          for (const event of exportData.topEvents) {
+            pushRow([
+              "Top Event",
+              event.name,
+              event.count,
+              `${event.percentage}%`,
+              "",
+              "",
+              "",
+            ]);
+          }
 
-      const csv = rows
-        .map((row) => row.map(escapeCsv).join(","))
-        .join("\r\n");
+          for (const event of exportData.recentEvents) {
+            pushRow([
+              "Recent Event",
+              event.eventName,
+              "",
+              "",
+              event.createdAt,
+              event.userId ?? "",
+              event.id,
+            ]);
+          }
 
-      return new Response(`\uFEFF${csv}`, {
+          controller.close();
+        },
+      });
+
+      return new Response(stream, {
         status: 200,
         headers: {
           "Content-Type": "text/csv; charset=utf-8",

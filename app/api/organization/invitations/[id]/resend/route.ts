@@ -3,6 +3,7 @@ import { z } from "zod";
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { getCurrentOrganization } from "@/lib/organization";
+import { formatUtcNaiveTimestamp } from "@/lib/analytics/date-utils";
 import { withTenantContext } from "@/lib/db-context";
 import { requireOrgPermission } from "@/lib/permissions";
 import { emailService } from "@/lib/email";
@@ -169,7 +170,7 @@ export const POST = auth(async function POST(req, context) {
         inviterName: session.user.name || "A team member",
         role: result.invitation.role,
         inviteToken: rawToken,
-        expiresAt: result.invitation.expiresAt,
+        expiresAt,
       });
     } catch (emailError) {
       console.error("Resend invitation email failed:", emailError);
@@ -185,7 +186,7 @@ export const POST = auth(async function POST(req, context) {
 
     return NextResponse.json({
       message: "Invitation resent successfully",
-      invitation: result.invitation,
+      invitation: { ...result.invitation, expiresAt: formatUtcNaiveTimestamp(result.invitation.expiresAt) },
     });
   } catch (error) {
     console.error("Resend invitation error:", error);

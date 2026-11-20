@@ -13,10 +13,6 @@ import {
 import { Pool } from "pg";
 import type { NextRequest } from "next/server";
 
-// --------------------------------------------------
-// MOCKS
-// --------------------------------------------------
-
 const mocks = vi.hoisted(() => ({
   organizationId: null as string | null,
 }));
@@ -37,6 +33,18 @@ vi.mock("@/lib/organization", () => ({
       name: "Integration Test Organization",
       slug: "integration-test-organization",
       role: "owner",
+    };
+  }),
+  getActiveOrganizationForUser: vi.fn(async (userId: string) => {
+    if (!mocks.organizationId) return null;
+
+    return {
+      id: mocks.organizationId,
+      organizationId: mocks.organizationId,
+      userId,
+      role: "owner",
+      name: "Integration Test Organization",
+      slug: "integration-test-organization",
     };
   }),
 }));
@@ -61,10 +69,6 @@ import {
 import { prisma } from "@/lib/prisma";
 import { verifyApiKey } from "@/lib/api-keys";
 
-// --------------------------------------------------
-// DATABASE CONNECTION
-// --------------------------------------------------
-
 const migrationUrl = process.env.DATABASE_URL_MIGRATION;
 
 if (!migrationUrl) {
@@ -75,10 +79,6 @@ const pool = new Pool({
   connectionString: migrationUrl,
   max: 1,
 });
-
-// --------------------------------------------------
-// TYPES
-// --------------------------------------------------
 
 type Fixture = {
   ownerId: string;
@@ -93,10 +93,6 @@ type Fixture = {
 };
 
 let fixture: Fixture;
-
-// --------------------------------------------------
-// CREATE TEST FIXTURES
-// --------------------------------------------------
 
 async function createFixture(): Promise<Fixture> {
   const data: Fixture = {
@@ -222,10 +218,6 @@ async function createFixture(): Promise<Fixture> {
   }
 }
 
-// --------------------------------------------------
-// CLEANUP TEST FIXTURES
-// --------------------------------------------------
-
 async function cleanupFixture() {
   if (!fixture) return;
 
@@ -265,9 +257,7 @@ async function cleanupFixture() {
   }
 }
 
-// --------------------------------------------------
-// REQUEST HELPERS
-// --------------------------------------------------
+
 
 function createRequest(
   method: string,

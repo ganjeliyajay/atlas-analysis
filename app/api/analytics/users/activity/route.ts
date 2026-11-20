@@ -1,10 +1,14 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import {
-  withTenantContext,
-  withUserContext,
-} from "@/lib/db-context";
+import { getActiveOrganizationForUser } from "@/lib/organization";
+import { formatUtcNaiveTimestamp } from "@/lib/analytics/date-utils";
+import { withTenantContext } from "@/lib/db-context";
+import { z } from "zod";
+
+const userActivityQuerySchema = z.object({
+  projectId: z.string().max(100).optional().nullable(),
+});
 
 const ACTIVE_WINDOW_MINUTES = 5;
 const RECENT_ACTIVITY_LIMIT = 50;
@@ -22,13 +26,7 @@ export const GET = auth(async function GET(request) {
     }
 
     // 2. Organization access
-    const membership = await withUserContext(authUserId, (tx) =>
-      tx.organizationMember.findFirst({
-        where: { userId: authUserId },
-        select: { organizationId: true },
-        orderBy: { createdAt: "asc" },
-      })
-    );
+    const membership = await getActiveOrganizationForUser(authUserId);
 
     if (!membership) {
       return NextResponse.json(
@@ -39,7 +37,18 @@ export const GET = auth(async function GET(request) {
 
     // 3. Project filter
     const { searchParams } = new URL(request.url);
-    const projectId = searchParams.get("projectId");
+    const parsedQuery = userActivityQuerySchema.safeParse({
+      projectId: searchParams.get("projectId"),
+    });
+
+    if (!parsedQuery.success) {
+      return NextResponse.json(
+        { success: false, error: parsedQuery.error.issues[0]?.message || "Invalid query parameters" },
+        { status: 400 }
+      );
+    }
+
+    const projectId = parsedQuery.data.projectId;
 
     // 4. Five-minute activity window
     const now = new Date();
@@ -170,7 +179,7 @@ export const GET = auth(async function GET(request) {
           browser: event.browser || "Unknown",
           projectId: event.projectId,
           projectName: event.project.name,
-          timestamp: event.createdAt.toISOString(),
+          timestamp: formatUtcNaiveTimestamp(event.createdAt),
         }));
 
         return {

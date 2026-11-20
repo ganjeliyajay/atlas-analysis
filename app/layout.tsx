@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import AtlasTracker from "@/components/analytics/AtlasTracker";
 import "./globals.css";
 
@@ -6,6 +6,12 @@ export const metadata: Metadata = {
   title: "Atlas Analytics — Modern Product Analytics Platform",
   description:
     "Unified product analytics, live event streams, funnel tracking, and retention analysis.",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: "#090D16",
 };
 
 export default function RootLayout({

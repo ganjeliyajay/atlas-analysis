@@ -1,8 +1,10 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { getActiveOrganizationForUser } from "@/lib/organization";
 import { Prisma } from "@/lib/generated/prisma/client";
-import { withTenantContext, withUserContext } from "@/lib/db-context";
+import { withTenantContext } from "@/lib/db-context";
+import { formatUtcNaiveTimestamp } from "@/lib/analytics/date-utils";
 import { z } from "zod";
 
 const querySchema = z.object({
@@ -11,22 +13,32 @@ const querySchema = z.object({
   search: z.string().trim().max(200).optional(),
   eventName: z.string().trim().max(200).optional(),
   userId: z.string().trim().max(200).optional(),
-  startDate: z.string().optional(),
-  endDate: z.string().optional(),
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(10),
 });
 
-function parseDate(value: string, endOfDay = false): Date | null {
-  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
+function parseDate(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) return null;
+  return date;
+}
 
-  const date = dateOnly
-    ? new Date(
-        `${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}`,
-      )
-    : new Date(value);
-
-  return Number.isNaN(date.getTime()) ? null : date;
+function parseEndDateExclusive(value: string): Date | null {
+  const date = parseDate(value);
+  if (!date) return null;
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date;
 }
 
 export const GET = auth(async function GET(request) {
@@ -39,22 +51,7 @@ export const GET = auth(async function GET(request) {
     }
 
     // Resolve the user's organization membership.
-    const membership = await withUserContext(
-      userIdFromSession,
-      async (tx) => {
-        return tx.organizationMember.findFirst({
-          where: {
-            userId: userIdFromSession,
-          },
-          select: {
-            organizationId: true,
-          },
-          orderBy: {
-            createdAt: "asc",
-          },
-        });
-      },
-    );
+    const membership = await getActiveOrganizationForUser(userIdFromSession);
 
     if (!membership) {
       return NextResponse.json(
@@ -99,40 +96,42 @@ export const GET = auth(async function GET(request) {
       limit,
     } = parsed.data;
 
+    if (Boolean(startDate) !== Boolean(endDate)) {
+      return NextResponse.json(
+        { error: "Both startDate and endDate are required for a custom range" },
+        { status: 400 },
+      );
+    }
+
     const now = new Date();
-    const rangeStart = new Date(now);
+    const rangeStart = new Date(Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+    ));
 
     switch (range) {
       case "today":
-        rangeStart.setHours(0, 0, 0, 0);
         break;
-
       case "30d":
-        rangeStart.setDate(now.getDate() - 30);
+        rangeStart.setUTCDate(rangeStart.getUTCDate() - 29);
         break;
-
       case "90d":
-        rangeStart.setDate(now.getDate() - 90);
+        rangeStart.setUTCDate(rangeStart.getUTCDate() - 89);
         break;
-
       case "7d":
       default:
-        rangeStart.setDate(now.getDate() - 7);
+        rangeStart.setUTCDate(rangeStart.getUTCDate() - 6);
         break;
     }
 
-    const parsedStartDate = startDate
-      ? parseDate(startDate)
-      : rangeStart;
-
-    const parsedEndDate = endDate
-      ? parseDate(endDate, true)
-      : now;
+    const parsedStartDate = startDate ? parseDate(startDate) : rangeStart;
+    const parsedEndDateExclusive = endDate ? parseEndDateExclusive(endDate) : now;
 
     if (
       !parsedStartDate ||
-      !parsedEndDate ||
-      parsedStartDate > parsedEndDate
+      !parsedEndDateExclusive ||
+      parsedStartDate >= parsedEndDateExclusive
     ) {
       return NextResponse.json(
         { error: "Invalid date range" },
@@ -170,7 +169,7 @@ export const GET = auth(async function GET(request) {
           },
           createdAt: {
             gte: parsedStartDate,
-            lte: parsedEndDate,
+            lt: parsedEndDateExclusive,
           },
           ...(projectId && projectId !== "All" ? { projectId } : {}),
           ...(eventName
@@ -283,7 +282,7 @@ export const GET = auth(async function GET(request) {
         // Daily chart uses the same filters and organization scope.
         const sqlConditions = [
           Prisma.sql`e."createdAt" >= ${parsedStartDate}`,
-          Prisma.sql`e."createdAt" <= ${parsedEndDate}`,
+          Prisma.sql`e."createdAt" < ${parsedEndDateExclusive}`,
           Prisma.sql`p."organizationId" = ${membership.organizationId}`,
         ];
 
@@ -310,17 +309,17 @@ export const GET = auth(async function GET(request) {
             Prisma.sql`(
               e."eventName" ILIKE ${`%${search}%`} OR
               e."userId" ILIKE ${`%${search}%`} OR
-              e."id"::text ILIKE ${`%${search}%`}
+              e."id"::text = ${search}
             )`,
           );
         }
 
         const dailyEvents = await tx.$queryRaw<
-          Array<{ date: Date; count: bigint }>
+          Array<{ date: string; count: bigint }>
         >(
           Prisma.sql`
             SELECT
-              DATE_TRUNC('day', e."createdAt") AS date,
+              TO_CHAR(DATE_TRUNC('day', e."createdAt"), 'YYYY-MM-DD') AS date,
               COUNT(*)::bigint AS count
             FROM "AnalyticsEvent" e
             INNER JOIN "Project" p
@@ -334,12 +333,15 @@ export const GET = auth(async function GET(request) {
         return NextResponse.json({
           success: true,
           data: {
-            events,
+            events: events.map((event) => ({
+              ...event,
+              createdAt: formatUtcNaiveTimestamp(event.createdAt),
+            })),
             totalEvents,
             activeUsers: uniqueUsers.length,
             uniqueEventNames: uniqueEventNames.length,
             dailyEvents: dailyEvents.map((item) => ({
-              date: item.date.toISOString().slice(0, 10),
+              date: item.date,
               count: Number(item.count),
             })),
             range,

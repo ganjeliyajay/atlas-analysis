@@ -1,4 +1,14 @@
 import { withUserContext } from "@/lib/db-context";
+
+/**
+ * Canonical tenant roles:
+ * - owner: Full organization control, billing, ownership transfer, admin invites
+ * - admin: Management access (projects, API keys, member invites/removals)
+ * - viewer: Standard read-only analytics access
+ */
+export const TENANT_ROLES = ["owner", "admin", "viewer"] as const;
+export type TenantRole = (typeof TENANT_ROLES)[number];
+
 export const ORG_ROLES = [
   "owner",
   "admin",
@@ -7,6 +17,15 @@ export const ORG_ROLES = [
 ] as const;
 
 export type OrgRole = (typeof ORG_ROLES)[number];
+
+export function normalizeOrgRole(role: string): TenantRole {
+  const normalized = role.trim().toLowerCase();
+  if (normalized === "member") return "viewer";
+  if (normalized === "owner" || normalized === "admin" || normalized === "viewer") {
+    return normalized;
+  }
+  return "viewer";
+}
 
 export type OrgAction =
   | "org:update"

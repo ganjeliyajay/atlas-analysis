@@ -1,6 +1,4 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
+# Dependencies
 /node_modules
 /.pnp
 .pnp.*
@@ -10,39 +8,47 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
-
-# next.js
+# Build output
 /.next/
 /out/
-
-# production
 /build
 
-# misc
-.DS_Store
-*.pem
+# Test output
+/coverage
+/playwright-report
+/test-results
 
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
-.env*
-
-# vercel
+# Local tooling
 .vercel
+.DS_Store
+*.dump
+*.zip
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-
-/lib/generated/prisma
+# Environment files: keep only the safe template
 .env
 .env.*
 !.env.example
 
-*.dump
+# Secrets and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs and caches
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.tsbuildinfo
+
+# Local IDE user settings
+.vscode/settings.json
+
+# Generated Lighthouse reports
+docs/perf/lighthouse/*.report.html
+docs/perf/lighthouse/*.report.json
+
+# Generated performance checkpoints
+docs/perf/*checkpoint.json
+docs/perf/*benchmark-results.json

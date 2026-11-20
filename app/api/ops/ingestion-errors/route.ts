@@ -2,6 +2,15 @@
 import { auth } from "@/auth";
 import { prismaOps } from "@/lib/prisma-ops";
 import { NextResponse } from "next/server";
+import { z } from "zod";
+
+const ingestionErrorsQuerySchema = z.object({
+  search: z.string().max(100).default(""),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  statusCode: z.coerce.number().int().min(100).max(599).optional(),
+  errorCode: z.string().max(100).optional(),
+});
 
 export const GET = auth(async function GET(request) {
   try {
@@ -22,28 +31,20 @@ export const GET = auth(async function GET(request) {
     }
 
     const url = new URL(request.url);
-    const search = (url.searchParams.get("search") ?? "").trim();
+    const rawQuery: Record<string, string> = {};
+    url.searchParams.forEach((val, key) => {
+      rawQuery[key] = val;
+    });
 
-    const page = Math.max(
-      1,
-      Number.parseInt(url.searchParams.get("page") ?? "1", 10) || 1
-    );
+    const parsedQuery = ingestionErrorsQuerySchema.safeParse(rawQuery);
+    if (!parsedQuery.success) {
+      return NextResponse.json(
+        { error: parsedQuery.error.issues[0]?.message || "Invalid query parameters" },
+        { status: 400 }
+      );
+    }
 
-    const limit = Math.min(
-      100,
-      Math.max(
-        1,
-        Number.parseInt(url.searchParams.get("limit") ?? "20", 10) || 20
-      )
-    );
-
-    const statusCodeParam = url.searchParams.get("statusCode");
-    const statusCode = statusCodeParam
-      ? Number.parseInt(statusCodeParam, 10)
-      : undefined;
-
-    const errorCode =
-      url.searchParams.get("errorCode")?.trim() || undefined;
+    const { search, page, limit, statusCode, errorCode } = parsedQuery.data;
 
     const where = {
       ...(Number.isInteger(statusCode) ? { statusCode } : {}),

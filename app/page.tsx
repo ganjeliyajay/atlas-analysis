@@ -106,9 +106,9 @@ export default function HomePage() {
             </Button>
           </Link>
 
-          <Link href="/dashboard">
-            <Button size="sm" className="gap-1.5 text-xs shadow-md shadow-indigo-600/20">
-              <span>Launch Dashboard</span>
+          <Link href="/register">
+            <Button size="sm" className="gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20">
+              <span>Get Started</span>
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
           </Link>
@@ -122,7 +122,7 @@ export default function HomePage() {
 
         <div className="inline-flex items-center gap-2 rounded-full border border-indigo-500/30 bg-indigo-950/40 px-3.5 py-1 text-xs font-medium text-indigo-300 mb-6">
           <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
-          <span>Production-grade Frontend Design & Realistic Telemetry Datasets</span>
+          <span>Production-grade Frontend Design &amp; Realistic Telemetry Datasets</span>
         </div>
 
         <h1 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-white max-w-4xl leading-tight">
@@ -138,9 +138,15 @@ export default function HomePage() {
 
         {/* Hero Actions */}
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+          <Link href="/register">
+            <Button size="lg" className="gap-2 bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/30">
+              <span>Get Started Free</span>
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </Link>
           <Link href="/dashboard">
-            <Button size="lg" className="gap-2 shadow-lg shadow-indigo-600/30">
-              <BarChart3 className="h-4 w-4" />
+            <Button variant="secondary" size="lg" className="gap-2 border-slate-700">
+              <BarChart3 className="h-4 w-4 text-indigo-400" />
               <span>Enter Customer Dashboard</span>
             </Button>
           </Link>

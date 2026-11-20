@@ -21,12 +21,17 @@ model User {
   ownedOrganizations Organization[]       @relation("OrganizationOwner")
   invitationsSent    Invitation[]         @relation("InvitedByUser")
   apiKeysCreated     ApiKey[]             @relation("ApiKeyCreator")
+  auditLogs          AuditLog[]
 }
 
 model Organization {
   id        String   @id @default(uuid())
   name      String
   slug      String   @unique
+  status    String   @default("active")
+  timezone  String   @default("UTC")
+  suspendedAt DateTime?
+  suspendedReason String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -63,7 +68,7 @@ model OrganizationMember {
   id             String   @id @default(uuid())
   userId         String
   organizationId String
-  role           String   @default("member")
+  role           String   @default("viewer")
   createdAt      DateTime @default(now())
 
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -115,6 +120,8 @@ model AnalyticsEvent {
   @@index([projectId, createdAt])
   @@index([projectId, eventName])
   @@index([projectId, userId])
+  @@index([projectId, userId, createdAt], map: "AnalyticsEvent_projectId_userId_createdAt_idx")
+  @@index([projectId, eventName, userId, createdAt], map: "AnalyticsEvent_projectId_eventName_userId_createdAt_idx")
 }
 
 model IngestionIdempotencyKey {
@@ -209,6 +216,7 @@ model IngestionRateLimitBucket {
   @@map("ingestion_token_buckets")
 }
 
+
 model EventHourlyRollup {
   organizationId String
   bucketStart    DateTime @db.Timestamp(6)
@@ -242,3 +250,21 @@ model EventDailyRollup {
   @@index([organizationId, eventName, bucketStart], map: "event_daily_rollups_organization_event_bucket_idx")
   @@map("event_daily_rollups")
 }
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String
+  action     String
+  targetType String
+  targetId   String
+  details    Json?
+  createdAt  DateTime @default(now())
+
+  actor User @relation(fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@index([targetType, targetId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+

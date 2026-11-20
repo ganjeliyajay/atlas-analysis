@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { assertDedicatedTestDatabase, assertLocalTestEndpoint } from "./test-safety.mjs";
 
 const endpoint = process.env.ATLAS_INGEST_URL ?? "http://localhost:3000/api/v1/events";
 const apiKey = process.env.ATLAS_API_KEY;
 if (!apiKey) throw new Error("Set ATLAS_API_KEY to a valid ingestion key.");
+assertDedicatedTestDatabase(process.env.DATABASE_URL_APP, "DATABASE_URL_APP");
+assertLocalTestEndpoint(endpoint, "ATLAS_ALLOW_REMOTE_INGESTION_TEST");
 
 const idempotencyKey = `atlas-idempotency-test-${randomUUID()}`;
 const event = {

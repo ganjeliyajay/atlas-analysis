@@ -1,7 +1,8 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { getCurrentOrganization } from "@/lib/organization";
+import { getActiveOrganizationForUser } from "@/lib/organization";
+import { formatUtcNaiveTimestamp, normalizeUtcNaiveTimestamp } from "@/lib/analytics/date-utils";
 import { withTenantContext } from "@/lib/db-context";
 import { requireOrgPermission } from "@/lib/permissions";
 import { generateApiKey } from "@/lib/api-keys";
@@ -37,7 +38,7 @@ export const GET = auth(async function GET(req) {
       );
     }
 
-    const org = await getCurrentOrganization();
+    const org = await getActiveOrganizationForUser(session.user.id);
 
     if (!org) {
       return NextResponse.json(
@@ -105,7 +106,7 @@ export const GET = auth(async function GET(req) {
         status = "revoked";
       } else if (
         key.expiresAt &&
-        key.expiresAt.getTime() <= now
+        normalizeUtcNaiveTimestamp(key.expiresAt).getTime() <= now
       ) {
         status = "expired";
       }
@@ -116,10 +117,10 @@ export const GET = auth(async function GET(req) {
         keyPrefix: key.keyPrefix,
         projectId: key.projectId,
         project: key.project?.name ?? "All Projects",
-        createdAt: key.createdAt.toISOString(),
-        expiresAt: key.expiresAt?.toISOString() ?? null,
-        lastUsedAt: key.lastUsedAt?.toISOString() ?? null,
-        revokedAt: key.revokedAt?.toISOString() ?? null,
+        createdAt: formatUtcNaiveTimestamp(key.createdAt),
+        expiresAt: key.expiresAt ? formatUtcNaiveTimestamp(key.expiresAt) : null,
+        lastUsedAt: key.lastUsedAt ? formatUtcNaiveTimestamp(key.lastUsedAt) : null,
+        revokedAt: key.revokedAt ? formatUtcNaiveTimestamp(key.revokedAt) : null,
         status,
         createdBy: key.createdBy?.name ?? "System",
       };
@@ -151,7 +152,7 @@ export const POST = auth(async function POST(req) {
       );
     }
 
-    const org = await getCurrentOrganization();
+    const org = await getActiveOrganizationForUser(session.user.id);
 
     if (!org) {
       return NextResponse.json(
@@ -268,7 +269,7 @@ export const POST = auth(async function POST(req) {
           "API key created successfully. Save your secret key now; you will not be able to view it again.",
         key: {
           ...createdKey,
-          expiresAt: createdKey.expiresAt?.toISOString() ?? null,
+          expiresAt: createdKey.expiresAt ? createdKey.expiresAt.toISOString() : null,
           createdAt: createdKey.createdAt.toISOString(),
           secretKey: rawKey,
         },

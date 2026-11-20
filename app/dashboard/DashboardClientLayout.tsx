@@ -25,22 +25,34 @@ export default function DashboardClientLayout({
     const searchParams = useSearchParams();
 
     const [mobileOpen, setMobileOpen] = useState(false);
-    const [selectedRange, setSelectedRange] =
-        useState<DateRangeOption>('30d');
+    const rangeParam = searchParams.get('range') as DateRangeOption | null;
+    const selectedRange: DateRangeOption =
+        rangeParam && ['today', '7d', '30d', '90d', 'custom'].includes(rangeParam)
+            ? rangeParam
+            : '30d';
+
+    function handleRangeChange(range: DateRangeOption) {
+        const params = new URLSearchParams(searchParams.toString());
+        params.set('range', range);
+        if (range !== 'custom') {
+            params.delete('startDate');
+            params.delete('endDate');
+        }
+        router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    }
 
     const [projects, setProjects] = useState<ApiProject[]>([]);
-    const [selectedProject, setSelectedProject] =
-        useState<ApiProject | null>(null);
+    const [selectedProject, setSelectedProject] = useState<ApiProject | null>(null);
 
     const [projectsLoading, setProjectsLoading] = useState(true);
-    const [organizationName, setOrganizationName] =
-        useState('Loading workspace...');
+    const [organizationName, setOrganizationName] = useState('Loading workspace...');
 
     const selectedProjectId = searchParams.get('projectId');
 
     // Load current organization
     useEffect(() => {
         let isMounted = true;
+
 
         async function loadOrganization() {
             try {
@@ -89,34 +101,25 @@ export default function DashboardClientLayout({
 
                 const data = await response.json();
 
-                const fetchedProjects: ApiProject[] =
-                    data.projects ?? [];
-
+                const fetchedProjects: ApiProject[] = data.projects ?? [];
                 if (!isMounted) return;
-
                 setProjects(fetchedProjects);
 
-                // Select the project from URL, or default to first project
-                const projectFromUrl = selectedProjectId
-                    ? fetchedProjects.find(
-                        (project) => project.id === selectedProjectId,
-                    )
-                    : undefined;
+                const projectFromUrl = selectedProjectId ? fetchedProjects.find(
+                    (project) => project.id === selectedProjectId,
+                ) : undefined;
 
-                const initialProject =
-                    projectFromUrl ?? fetchedProjects[0] ?? null;
-
+                const initialProject = projectFromUrl ?? fetchedProjects[0] ?? null;
                 setSelectedProject(initialProject);
 
                 // Keep project selection in the URL
-                if (
-                    initialProject &&
-                    initialProject.id !== selectedProjectId
+                if (initialProject && initialProject.id !== selectedProjectId
                 ) {
                     const params = new URLSearchParams(
                         searchParams.toString(),
                     );
 
+                    
                     params.set('projectId', initialProject.id);
 
                     router.replace(
@@ -126,6 +129,7 @@ export default function DashboardClientLayout({
                 }
             } catch (error) {
                 console.error('Projects fetch error:', error);
+
 
                 if (isMounted) {
                     setProjects([]);
@@ -139,7 +143,6 @@ export default function DashboardClientLayout({
         }
 
         loadProjects();
-
         return () => {
             isMounted = false;
         };
@@ -178,7 +181,7 @@ export default function DashboardClientLayout({
                 <DashboardHeader
                     onOpenMobileMenu={() => setMobileOpen(true)}
                     selectedRange={selectedRange}
-                    onRangeChange={setSelectedRange}
+                    onRangeChange={handleRangeChange}
                     projects={projects}
                     projectsLoading={projectsLoading}
                     selectedProject={selectedProject ?? undefined}

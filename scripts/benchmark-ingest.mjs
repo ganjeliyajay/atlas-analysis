@@ -1,3 +1,5 @@
+import { assertDedicatedTestDatabase, assertLocalTestEndpoint } from "./test-safety.mjs";
+
 const endpoint = process.env.ATLAS_INGEST_URL ?? "http://localhost:3000/api/v1/events";
 const apiKey = process.env.ATLAS_API_KEY;
 const batchSize = Number.parseInt(process.env.INGEST_BATCH_SIZE ?? "100", 10);
@@ -5,6 +7,8 @@ const batches = Number.parseInt(process.env.INGEST_BATCHES ?? "100", 10);
 const concurrency = Number.parseInt(process.env.INGEST_CONCURRENCY ?? "10", 10);
 
 if (!apiKey) throw new Error("Set ATLAS_API_KEY to a valid ingestion key.");
+assertDedicatedTestDatabase(process.env.DATABASE_URL_APP, "DATABASE_URL_APP");
+assertLocalTestEndpoint(endpoint, "ATLAS_ALLOW_REMOTE_BENCHMARK");
 if (![batchSize, batches, concurrency].every(Number.isSafeInteger) ||
   batchSize < 1 || batchSize > 500 || batches < 1 || concurrency < 1) {
   throw new Error("Invalid benchmark settings. Batch size must be 1-500.");

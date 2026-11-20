@@ -135,30 +135,19 @@ export default function AtlasTracker() {
 
       const body = JSON.stringify(payload);
 
-      // sendBeacon is designed for sending data when a page is closing.
-      const blob = new Blob([body], {
-        type: "application/json",
+      // fetch keepalive supports the Authorization header. Avoid placing API
+      // credentials in query strings, which can be retained in access logs.
+      void fetch(API_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body,
+        keepalive: true,
+      }).catch((error) => {
+        console.error("Atlas Tracker: page_exit failed", error);
       });
-
-      const sent = navigator.sendBeacon(
-        `${API_URL}?apiKey=${encodeURIComponent(API_KEY)}`,
-        blob
-      );
-
-      // Fallback if sendBeacon fails.
-      if (!sent) {
-        void fetch(API_URL, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body,
-          keepalive: true,
-        }).catch((error) => {
-          console.error("Atlas Tracker: page_exit failed", error);
-        });
-      }
     };
 
     const handleVisibilityChange = () => {

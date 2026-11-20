@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/utils';
 
 type ConnectionStatus =
+
   | 'connected'
   | 'connecting'
   | 'reconnecting'
@@ -176,7 +177,7 @@ export default function LiveEventsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
 
   const [connectionStatus, setConnectionStatus] =
-    useState<ConnectionStatus>('connecting');
+   useState<ConnectionStatus>('connecting');
 
   // Live analytics derived from the events currently held in the 40-event buffer.
   const analytics = useMemo(() => {

@@ -1,10 +1,16 @@
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import {
-  withUserContext,
-  withTenantContext,
-} from "@/lib/db-context";
+import { getActiveOrganizationForUser } from "@/lib/organization";
+import { withTenantContext } from "@/lib/db-context";
+import { Prisma } from "@/lib/generated/prisma/client";
+import { z } from "zod";
+
+const pagesQuerySchema = z.object({
+  projectId: z.string().max(100).optional().nullable(),
+  device: z.string().max(50).default("all"),
+  range: z.enum(["7d", "30d", "90d"]).default("30d"),
+});
 
 export const GET = auth(async function GET(request) {
   try {
@@ -18,16 +24,7 @@ export const GET = auth(async function GET(request) {
     }
 
     // Step 1: Verify user's organization membership
-    const membership = await withUserContext(
-      userId,
-      async (tx) => {
-        return tx.organizationMember.findFirst({
-          where: { userId },
-          select: { organizationId: true },
-          orderBy: { createdAt: "asc" },
-        });
-      }
-    );
+    const membership = await getActiveOrganizationForUser(userId);
 
     if (!membership) {
       return NextResponse.json(
@@ -42,25 +39,30 @@ export const GET = auth(async function GET(request) {
       membership.organizationId,
       async (tx) => {
         const { searchParams } = new URL(request.url);
+        const rawQuery: Record<string, string> = {};
+        searchParams.forEach((val, key) => {
+          rawQuery[key] = val;
+        });
 
-        const projectId = searchParams.get("projectId");
-        const device = searchParams.get("device") || "all";
-        const range = searchParams.get("range") || "30d";
-
-        const allowedRanges = ["7d", "30d", "90d"];
-
-        if (!allowedRanges.includes(range)) {
+        const parsed = pagesQuerySchema.safeParse(rawQuery);
+        if (!parsed.success) {
           return NextResponse.json(
-            { error: "Invalid date range" },
+            { error: parsed.error.issues[0]?.message || "Invalid query parameters" },
             { status: 400 }
           );
         }
 
+        const { projectId, device, range } = parsed.data;
+
         const days = Number(range.replace("d", ""));
         const now = new Date();
-        const startDate = new Date(now);
-
-        startDate.setDate(startDate.getDate() - days);
+        const todayUtcStart = new Date(Date.UTC(
+          now.getUTCFullYear(),
+          now.getUTCMonth(),
+          now.getUTCDate(),
+        ));
+        const startDate = new Date(todayUtcStart);
+        startDate.setUTCDate(startDate.getUTCDate() - (days - 1));
 
         // Verify project belongs to current organization
         if (projectId && projectId !== "All") {
@@ -101,24 +103,41 @@ export const GET = auth(async function GET(request) {
             : {}),
         };
 
-        // Fetch page views
-        const events = await tx.analyticsEvent.findMany({
-          where: {
-            ...baseWhere,
-            eventName: "page_view",
-            pageUrl: { not: null },
-          },
-          select: {
-            pageUrl: true,
-            userId: true,
-            sessionId: true,
-            device: true,
-            createdAt: true,
-          },
-          orderBy: {
-            createdAt: "asc",
-          },
-        });
+        // Fetch page views with the UTC calendar date formatted in SQL. This
+        // avoids converting timestamp-without-time-zone values through the
+        // Node process timezone when building daily chart buckets.
+        const pageViewConditions = [
+          Prisma.sql`e."createdAt" >= ${startDate}`,
+          Prisma.sql`e."createdAt" <= ${now}`,
+          Prisma.sql`p."organizationId" = ${membership.organizationId}`,
+          Prisma.sql`e."eventName" = 'page_view'`,
+          Prisma.sql`e."pageUrl" IS NOT NULL`,
+        ];
+        if (projectId && projectId !== "All") {
+          pageViewConditions.push(Prisma.sql`e."projectId" = ${projectId}`);
+        }
+        if (device !== "all") {
+          pageViewConditions.push(Prisma.sql`e."device" ILIKE ${device}`);
+        }
+
+        const events = await tx.$queryRaw<Array<{
+          pageUrl: string | null;
+          userId: string | null;
+          sessionId: string | null;
+          device: string | null;
+          dateKey: string;
+        }>>(Prisma.sql`
+          SELECT
+            e."pageUrl",
+            e."userId",
+            e."sessionId",
+            e."device",
+            TO_CHAR(e."createdAt", 'YYYY-MM-DD') AS "dateKey"
+          FROM "AnalyticsEvent" e
+          INNER JOIN "Project" p ON p."id" = e."projectId"
+          WHERE ${Prisma.join(pageViewConditions, " AND ")}
+          ORDER BY e."createdAt" ASC
+        `);
 
         // Fetch page exit events
         const pageExitEvents =
@@ -181,9 +200,7 @@ export const GET = auth(async function GET(request) {
             );
           }
 
-          const dateKey = event.createdAt
-            .toISOString()
-            .slice(0, 10);
+          const dateKey = event.dateKey;
 
           dailyMap.set(
             dateKey,
@@ -263,8 +280,8 @@ export const GET = auth(async function GET(request) {
         }[] = [];
 
         for (let i = days - 1; i >= 0; i--) {
-          const date = new Date(now);
-          date.setDate(now.getDate() - i);
+          const date = new Date(todayUtcStart);
+          date.setUTCDate(date.getUTCDate() - i);
 
           const dateKey = date.toISOString().slice(0, 10);
 
